@@ -1,0 +1,922 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Windows 365 Agent</title>
+<style>
+  :root {
+    color-scheme: light;
+    --navy: #0b1530;
+    --navy-2: #111f42;
+    --blue: #2563eb;
+    --blue-2: #1556d8;
+    --blue-soft: #eaf1ff;
+    --ink: #172033;
+    --muted: #68738a;
+    --line: #e1e6ef;
+    --surface: #ffffff;
+    --canvas: #f7f8fb;
+    --danger: #b42318;
+    --shadow: 0 16px 50px rgba(26, 42, 78, .12);
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { width: 100%; height: 100%; }
+
+  body {
+    margin: 0;
+    overflow: hidden;
+    background: var(--canvas);
+    color: var(--ink);
+    font: 15px/1.55 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  button, textarea { font: inherit; }
+  button { cursor: pointer; }
+
+  .app {
+    display: grid;
+    grid-template-columns: 284px minmax(0, 1fr);
+    height: 100%;
+  }
+
+  .sidebar {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: 22px 14px 16px;
+    overflow: hidden;
+    background:
+      radial-gradient(circle at 20% 0%, rgba(59, 130, 246, .24), transparent 34%),
+      linear-gradient(180deg, var(--navy-2), var(--navy));
+    color: #fff;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 0 8px 20px;
+  }
+
+  .brand-mark, .agent-avatar {
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: linear-gradient(145deg, #5a8cff, #2c5de5);
+    color: white;
+    box-shadow: 0 6px 18px rgba(37, 99, 235, .3);
+  }
+
+  .brand-mark svg, .agent-avatar svg,
+  .icon-button svg, .send-button svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .brand-copy strong, .brand-copy span { display: block; }
+  .brand-copy strong { font-size: 16px; letter-spacing: -.015em; }
+  .brand-copy span { margin-top: 1px; color: #9fb0d4; font-size: 11px; }
+
+  .new-task {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    margin: 0 0 18px;
+    padding: 10px 11px;
+    border: 0;
+    border-top: 1px solid rgba(255, 255, 255, .14);
+    border-bottom: 1px solid rgba(255, 255, 255, .14);
+    background: transparent;
+    color: #fff;
+    text-align: left;
+  }
+
+  .plus {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: #fff;
+    color: var(--navy);
+    font-size: 19px;
+    line-height: 1;
+  }
+
+  .section-label {
+    padding: 0 10px 7px;
+    color: #7f91b8;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+  }
+
+  .sessions {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #40517a transparent;
+  }
+
+  .session-row {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 28px;
+    align-items: center;
+    width: 100%;
+    margin: 1px 0;
+    padding: 9px 7px 9px 12px;
+    border: 0;
+    border-left: 2px solid transparent;
+    background: transparent;
+    color: #ccd6ec;
+    text-align: left;
+  }
+
+  .session-row:hover { background: rgba(255, 255, 255, .055); }
+  .session-row.active {
+    border-left-color: #72a0ff;
+    background: rgba(75, 119, 222, .16);
+    color: #fff;
+  }
+
+  .session-copy { min-width: 0; }
+  .session-copy strong, .session-copy span { display: block; }
+  .session-copy strong {
+    overflow: hidden;
+    font-size: 13px;
+    font-weight: 560;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .session-copy span { margin-top: 2px; color: #8293b7; font-size: 10px; }
+
+  .delete-session {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: transparent;
+    font-size: 17px;
+  }
+
+  .session-row:hover .delete-session {
+    color: #90a1c4;
+  }
+  .delete-session:hover {
+    background: rgba(255, 255, 255, .09);
+    color: #fff !important;
+  }
+
+  .sidebar-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 13px 9px 2px;
+    border-top: 1px solid rgba(255, 255, 255, .1);
+    color: #8fa1c4;
+    font-size: 11px;
+  }
+
+  .cloud-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #59d38c;
+    box-shadow: 0 0 0 4px rgba(89, 211, 140, .1);
+  }
+
+  .main {
+    display: grid;
+    grid-template-rows: 68px minmax(0, 1fr) auto;
+    min-width: 0;
+    background: var(--canvas);
+  }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 0 28px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(255, 255, 255, .88);
+    backdrop-filter: blur(18px);
+  }
+
+  .task-title { min-width: 0; }
+  .task-title strong, .task-title span { display: block; }
+  .task-title strong {
+    overflow: hidden;
+    font-size: 15px;
+    font-weight: 650;
+    letter-spacing: -.012em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .task-title span {
+    overflow: hidden;
+    max-width: 720px;
+    margin-top: 1px;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .top-actions { display: flex; align-items: center; gap: 10px; }
+
+  .run-state {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .state-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #a1a9b8;
+  }
+  .run-state.running .state-dot {
+    background: var(--blue);
+    animation: pulse 1.3s ease-in-out infinite;
+  }
+  .run-state.failed .state-dot { background: var(--danger); }
+
+  @keyframes pulse {
+    50% { box-shadow: 0 0 0 6px rgba(37, 99, 235, .12); }
+  }
+
+  .icon-button {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    background: var(--surface);
+    color: var(--muted);
+  }
+  .icon-button:hover { border-color: #c8d4e8; color: var(--ink); }
+  .icon-button.stop:hover { border-color: #efb4ae; color: var(--danger); }
+
+  .conversation {
+    min-height: 0;
+    overflow-y: auto;
+    scroll-behavior: smooth;
+  }
+
+  .conversation-inner {
+    width: min(860px, calc(100% - 48px));
+    min-height: 100%;
+    margin: 0 auto;
+    padding: 34px 0 150px;
+  }
+
+  .welcome {
+    display: grid;
+    place-items: center;
+    min-height: calc(100vh - 250px);
+    text-align: center;
+  }
+
+  .welcome-content { max-width: 620px; }
+  .welcome-orb {
+    display: grid;
+    place-items: center;
+    width: 58px;
+    height: 58px;
+    margin: 0 auto 22px;
+    border-radius: 50%;
+    background:
+      radial-gradient(circle at 30% 25%, #8bb2ff, transparent 38%),
+      linear-gradient(145deg, #477ae9, #143fae);
+    color: white;
+    box-shadow: 0 18px 40px rgba(38, 84, 190, .22);
+  }
+  .welcome-orb svg { width: 28px; height: 28px; }
+  .welcome h1 {
+    margin: 0;
+    font-size: clamp(28px, 4vw, 42px);
+    font-weight: 680;
+    letter-spacing: -.045em;
+  }
+  .welcome p {
+    margin: 12px auto 26px;
+    color: var(--muted);
+    font-size: 16px;
+  }
+
+  .suggestions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 24px;
+    max-width: 620px;
+    margin: 0 auto;
+    text-align: left;
+  }
+
+  .suggestion {
+    padding: 12px 2px;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    background: transparent;
+    color: var(--ink);
+    text-align: left;
+  }
+  .suggestion span {
+    display: block;
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .suggestion:hover { color: var(--blue); }
+
+  .turn {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr);
+    gap: 13px;
+    margin: 0 0 26px;
+  }
+
+  .turn.user {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .turn.user .message {
+    max-width: min(720px, 86%);
+    padding: 11px 15px;
+    border: 1px solid #cedcff;
+    border-radius: 18px 18px 5px 18px;
+    background: var(--blue-soft);
+  }
+
+  .agent-avatar {
+    width: 30px;
+    height: 30px;
+    margin-top: 2px;
+    box-shadow: none;
+  }
+  .agent-avatar svg { width: 15px; height: 15px; }
+
+  .message {
+    min-width: 0;
+    color: #20293b;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .message p { margin: 0 0 12px; }
+  .message p:last-child { margin-bottom: 0; }
+  .message code {
+    padding: 2px 5px;
+    border-radius: 5px;
+    background: #edf0f5;
+    font-family: var(--mono);
+    font-size: .9em;
+  }
+  .message pre {
+    margin: 13px 0;
+    padding: 14px 16px;
+    overflow: auto;
+    border: 1px solid #27334b;
+    border-radius: 10px;
+    background: #111827;
+    color: #dbe5f6;
+    font: 12px/1.6 var(--mono);
+    white-space: pre;
+  }
+  .message pre code { padding: 0; background: transparent; color: inherit; }
+
+  .activity {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: -8px 0 22px 49px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .spinner {
+    width: 13px;
+    height: 13px;
+    border: 2px solid #cad4e6;
+    border-top-color: var(--blue);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .error-message {
+    margin: 0 0 22px 49px;
+    color: var(--danger);
+    font-size: 13px;
+  }
+
+  .composer-shell {
+    position: relative;
+    padding: 12px 24px 20px;
+    background: linear-gradient(180deg, rgba(247, 248, 251, 0), var(--canvas) 25%);
+  }
+
+  .composer {
+    width: min(880px, 100%);
+    margin: 0 auto;
+    padding: 10px 10px 9px 16px;
+    border: 1px solid #cfd7e5;
+    border-radius: 20px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+
+  .composer textarea {
+    display: block;
+    width: 100%;
+    min-height: 28px;
+    max-height: 150px;
+    padding: 3px 3px 7px;
+    resize: none;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--ink);
+    line-height: 1.5;
+  }
+  .composer textarea::placeholder { color: #929bab; }
+
+  .composer-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .workspace-label {
+    overflow: hidden;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .send-button {
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--blue);
+    color: white;
+  }
+  .send-button:hover { background: var(--blue-2); }
+  .send-button:disabled { background: #c8cfdb; cursor: default; }
+
+  .composer-hint {
+    margin: 7px auto 0;
+    color: #929baa;
+    font-size: 10px;
+    text-align: center;
+  }
+
+  @media (max-width: 760px) {
+    .app { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+    .main { grid-template-rows: 60px minmax(0, 1fr) auto; }
+    .topbar { padding: 0 15px; }
+    .conversation-inner { width: calc(100% - 26px); padding-top: 22px; }
+    .suggestions { grid-template-columns: 1fr; }
+    .composer-shell { padding: 8px 10px 12px; }
+    .task-title span { max-width: 58vw; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M7 16.5A4.5 4.5 0 0 1 7.5 7.6 6 6 0 0 1 19 10a3.5 3.5 0 0 1-1 6.85"/>
+          <path d="m9 14 3-3 3 3M12 11v8"/>
+        </svg>
+      </div>
+      <div class="brand-copy">
+        <strong>Windows 365 Agent</strong>
+        <span>Cloud PC engineering workspace</span>
+      </div>
+    </div>
+
+    <button class="new-task" id="new-task">
+      <span class="plus">+</span>
+      <span>New task</span>
+    </button>
+
+    <div class="section-label">Recent</div>
+    <div class="sessions" id="sessions"></div>
+
+    <div class="sidebar-footer">
+      <span class="cloud-dot"></span>
+      <span>Cloud PC connected</span>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="task-title">
+        <strong id="task-name">New engineering task</strong>
+        <span id="task-workspace">Cloud PC workspace</span>
+      </div>
+      <div class="top-actions">
+        <div class="run-state" id="run-state">
+          <span class="state-dot"></span>
+          <span id="state-text">Ready</span>
+        </div>
+        <button class="icon-button stop" id="stop" title="Stop current turn" hidden>
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <rect x="7" y="7" width="10" height="10" rx="1"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <section class="conversation" id="conversation">
+      <div class="conversation-inner" id="conversation-inner"></div>
+    </section>
+
+    <footer class="composer-shell">
+      <div class="composer">
+        <textarea id="prompt" rows="1"
+          placeholder="Ask the Cloud PC to code, build, validate, or investigate..."></textarea>
+        <div class="composer-bar">
+          <span class="workspace-label" id="composer-workspace">Runs on your Cloud PC</span>
+          <button class="send-button" id="send" title="Send">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="m6 12 6-6 6 6M12 6v12"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="composer-hint">Enter to send. Shift+Enter for a new line. You can close this page while the task runs.</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+  const state = {
+    sessions: [],
+    active: null,
+    source: null,
+    seen: new Set(),
+    assistantText: '',
+    assistantMessage: null,
+    activity: null,
+  };
+
+  const el = id => document.getElementById(id);
+
+  async function api(path, options = {}) {
+    const response = await fetch(path, {
+      ...options,
+      headers: { 'content-type': 'application/json', ...(options.headers || {}) },
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || response.statusText);
+    return body;
+  }
+
+  function escapeHtml(value) {
+    return String(value || '').replace(/[&<>"']/g, char => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[char]));
+  }
+
+  function markdown(text) {
+    const blocks = [];
+    let source = escapeHtml(text);
+    source = source.replace(/```([^\n]*)\n([\s\S]*?)```/g, (_, language, code) => {
+      const token = `@@CODE_${blocks.length}@@`;
+      blocks.push(`<pre><code>${code.replace(/\n$/, '')}</code></pre>`);
+      return token;
+    });
+    source = source
+      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n\n+/g, '</p><p>')
+      .replace(/\n/g, '<br>');
+    source = `<p>${source}</p>`;
+    blocks.forEach((block, index) => {
+      source = source.replace(`<p>@@CODE_${index}@@</p>`, block);
+      source = source.replace(`@@CODE_${index}@@`, block);
+    });
+    return source;
+  }
+
+  function formatTime(timestamp) {
+    return new Intl.DateTimeFormat([], {
+      hour: '2-digit', minute: '2-digit',
+    }).format(new Date(timestamp));
+  }
+
+  function setRunState(status) {
+    const root = el('run-state');
+    root.className = `run-state ${status}`;
+    const labels = {
+      running: 'Working',
+      failed: 'Needs attention',
+      idle: 'Ready',
+    };
+    el('state-text').textContent = labels[status] || 'Ready';
+    el('stop').hidden = status !== 'running';
+    el('send').disabled = status === 'running';
+    el('prompt').disabled = status === 'running';
+  }
+
+  function renderWelcome() {
+    state.assistantMessage = null;
+    state.assistantText = '';
+    state.activity = null;
+    el('conversation-inner').innerHTML = `
+      <div class="welcome">
+        <div class="welcome-content">
+          <div class="welcome-orb">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <path d="M8 16.5A4.5 4.5 0 0 1 8.5 7.6 6 6 0 0 1 20 10a3.5 3.5 0 0 1-1 6.85"/>
+              <path d="M9 13h6M12 10v6"/>
+            </svg>
+          </div>
+          <h1>What should the Cloud PC work on?</h1>
+          <p>Start an engineering task here, leave the page, and return when you are ready.</p>
+          <div class="suggestions">
+            <button class="suggestion" data-prompt="Review this repository and identify the highest-impact reliability issue.">
+              Review a repository<span>Find the highest-impact issue</span>
+            </button>
+            <button class="suggestion" data-prompt="Run the relevant tests, investigate any failures, and propose a focused fix.">
+              Investigate test failures<span>Run, diagnose, and propose a fix</span>
+            </button>
+            <button class="suggestion" data-prompt="Explain the architecture of this project and highlight its main operational risks.">
+              Understand a codebase<span>Architecture and operational risks</span>
+            </button>
+            <button class="suggestion" data-prompt="Check the current project status and summarize what remains to be done.">
+              Check project status<span>Summarize progress and next steps</span>
+            </button>
+          </div>
+        </div>
+      </div>`;
+    document.querySelectorAll('.suggestion').forEach(button => {
+      button.onclick = () => {
+        el('prompt').value = button.dataset.prompt;
+        resizePrompt();
+        el('prompt').focus();
+      };
+    });
+  }
+
+  function renderSessions() {
+    const container = el('sessions');
+    container.innerHTML = '';
+    for (const session of state.sessions) {
+      const row = document.createElement('div');
+      row.className = `session-row${state.active?.id === session.id ? ' active' : ''}`;
+
+      const open = document.createElement('button');
+      open.className = 'session-row';
+      open.style.display = 'contents';
+      open.innerHTML = `
+        <span class="session-copy">
+          <strong>${escapeHtml(session.name)}</strong>
+          <span>${session.status === 'running' ? 'Working' : formatTime(session.updatedAt)} · ${session.turns} turn${session.turns === 1 ? '' : 's'}</span>
+        </span>`;
+      open.onclick = () => openSession(session.id);
+
+      const remove = document.createElement('button');
+      remove.className = 'delete-session';
+      remove.title = 'Delete task';
+      remove.textContent = '×';
+      remove.onclick = async event => {
+        event.stopPropagation();
+        await api(`/api/sessions/${session.id}`, { method: 'DELETE' });
+        if (state.active?.id === session.id) newTask();
+        await refreshSessions();
+      };
+
+      row.appendChild(open);
+      row.appendChild(remove);
+      container.appendChild(row);
+    }
+  }
+
+  function addUser(text) {
+    const row = document.createElement('div');
+    row.className = 'turn user';
+    row.innerHTML = `<div class="message">${escapeHtml(text)}</div>`;
+    el('conversation-inner').appendChild(row);
+  }
+
+  function ensureAssistant() {
+    if (state.assistantMessage) return state.assistantMessage;
+    const row = document.createElement('div');
+    row.className = 'turn assistant';
+    row.innerHTML = `
+      <div class="agent-avatar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M8 16.5A4.5 4.5 0 0 1 8.5 7.6 6 6 0 0 1 20 10a3.5 3.5 0 0 1-1 6.85"/>
+          <path d="M9 13h6M12 10v6"/>
+        </svg>
+      </div>
+      <div class="message"></div>`;
+    el('conversation-inner').appendChild(row);
+    state.assistantMessage = row.querySelector('.message');
+    return state.assistantMessage;
+  }
+
+  function showActivity(text) {
+    if (!state.activity) {
+      state.activity = document.createElement('div');
+      state.activity.className = 'activity';
+      state.activity.innerHTML = '<span class="spinner"></span><span></span>';
+      el('conversation-inner').appendChild(state.activity);
+    }
+    state.activity.lastElementChild.textContent = text || 'Working on your request';
+  }
+
+  function clearActivity() {
+    state.activity?.remove();
+    state.activity = null;
+  }
+
+  function addError(text) {
+    clearActivity();
+    const item = document.createElement('div');
+    item.className = 'error-message';
+    item.textContent = text;
+    el('conversation-inner').appendChild(item);
+  }
+
+  function appendEvent(event) {
+    const key = `${state.active?.id}:${event.seq}`;
+    if (state.seen.has(key)) return;
+    state.seen.add(key);
+
+    if (event.kind === 'user') {
+      clearActivity();
+      state.assistantMessage = null;
+      state.assistantText = '';
+      addUser(event.data?.text || '');
+    } else if (event.kind === 'assistant') {
+      clearActivity();
+      const message = ensureAssistant();
+      const text = event.data?.text || '';
+      if (event.data?.append) {
+        state.assistantText += text;
+        message.textContent = state.assistantText;
+      } else if (event.data?.final) {
+        state.assistantText = text || state.assistantText;
+        message.innerHTML = markdown(state.assistantText);
+      } else if (text) {
+        state.assistantText = text;
+        message.textContent = text;
+      }
+    } else if (event.kind === 'activity') {
+      showActivity(event.data?.text || 'Working on your request');
+    } else if (event.kind === 'error') {
+      addError(event.data?.text || 'The task failed.');
+    } else if (event.kind === 'session' && event.data?.status) {
+      setRunState(event.data.status);
+      if (event.data.status !== 'running') clearActivity();
+    }
+
+    el('conversation').scrollTop = el('conversation').scrollHeight;
+  }
+
+  async function refreshSessions() {
+    const data = await api('/api/sessions');
+    state.sessions = data.sessions;
+    renderSessions();
+  }
+
+  async function openSession(id) {
+    state.source?.close();
+    state.seen.clear();
+    state.assistantMessage = null;
+    state.assistantText = '';
+    state.activity = null;
+
+    const session = await api(`/api/sessions/${id}`);
+    state.active = session;
+    el('task-name').textContent = session.name;
+    el('task-workspace').textContent = session.cwd;
+    el('composer-workspace').textContent = session.cwd;
+    el('conversation-inner').innerHTML = '';
+    for (const event of session.events) appendEvent(event);
+    setRunState(session.status);
+    renderSessions();
+
+    state.source = new EventSource(`/api/sessions/${id}/events`);
+    state.source.onmessage = message => {
+      appendEvent(JSON.parse(message.data));
+      refreshSessions().catch(() => {});
+    };
+  }
+
+  function newTask() {
+    state.source?.close();
+    state.source = null;
+    state.active = null;
+    state.seen.clear();
+    el('task-name').textContent = 'New engineering task';
+    el('task-workspace').textContent = 'Cloud PC workspace';
+    el('composer-workspace').textContent = 'Runs on your Cloud PC';
+    setRunState('idle');
+    renderSessions();
+    renderWelcome();
+    el('prompt').disabled = false;
+    el('prompt').focus();
+  }
+
+  async function ensureSession() {
+    if (state.active) return state.active;
+    const session = await api('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'New engineering task' }),
+    });
+    await refreshSessions();
+    await openSession(session.id);
+    return state.active;
+  }
+
+  async function sendPrompt() {
+    const prompt = el('prompt').value.trim();
+    if (!prompt) return;
+    const session = await ensureSession();
+    el('prompt').value = '';
+    resizePrompt();
+    setRunState('running');
+    showActivity('Starting on your Cloud PC');
+    try {
+      await api(`/api/sessions/${session.id}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({ prompt }),
+      });
+    } catch (error) {
+      addError(error.message);
+      setRunState('failed');
+    }
+  }
+
+  function resizePrompt() {
+    const prompt = el('prompt');
+    prompt.style.height = 'auto';
+    prompt.style.height = `${Math.min(prompt.scrollHeight, 150)}px`;
+  }
+
+  el('new-task').onclick = newTask;
+  el('send').onclick = sendPrompt;
+  el('prompt').oninput = resizePrompt;
+  el('prompt').onkeydown = event => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      sendPrompt();
+    }
+  };
+  el('stop').onclick = async () => {
+    if (!state.active) return;
+    await api(`/api/sessions/${state.active.id}/abort`, {
+      method: 'POST', body: '{}',
+    });
+  };
+
+  (async () => {
+    await refreshSessions();
+    const running = state.sessions.find(session => session.status === 'running');
+    if (running) await openSession(running.id);
+    else newTask();
+  })().catch(error => {
+    addError(error.message);
+    setRunState('failed');
+  });
+</script>
+</body>
+</html>
