@@ -147,6 +147,9 @@ cloudpc list
 cloudpc use <name>
 ```
 
+On Windows, `cloudpc agent` opens Agent Chat in Edge app mode for a clean,
+browser-chrome-free workspace.
+
 `reconnect` and `disconnect` affect only the local Dev Tunnel connector. They
 never restart or stop the Cloud PC, remote agent, or persistent sessions.
 

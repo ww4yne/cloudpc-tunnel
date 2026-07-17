@@ -335,7 +335,22 @@ switch ($Action) {
             "tmux source-file ~/.tmux.conf 2>/dev/null || true; exec env TERM=xterm-256color tmux -u new-session -A -s '$sessionName'"
     }
     'agent' {
-        Start-Process (Get-AgentUrl)
+        $url = Get-AgentUrl
+        if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+            $edge = @(
+                (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'),
+                (Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe')
+            ) | Where-Object { $_ -and (Test-Path $_) } |
+                Select-Object -First 1
+            if ($edge) {
+                Start-Process $edge -ArgumentList @(
+                    "--app=$url",
+                    '--start-maximized'
+                )
+                return
+            }
+        }
+        Start-Process $url
     }
     'status' {
         $process = Get-ConnectorProcess
