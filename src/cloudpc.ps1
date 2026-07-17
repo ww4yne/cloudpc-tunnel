@@ -345,7 +345,8 @@ switch ($Action) {
             if ($edge) {
                 Start-Process $edge -ArgumentList @(
                     "--app=$url",
-                    '--start-maximized'
+                    '--start-maximized',
+                    '--disable-gpu'
                 )
                 return
             }
