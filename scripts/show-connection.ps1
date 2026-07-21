@@ -2,7 +2,8 @@
 param(
     [string]$TunnelId,
     [string]$Distro = 'Ubuntu',
-    [int]$AgentChatPort = 8787
+    [int]$AgentChatPort = 8787,
+    [switch]$WebOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -24,17 +25,36 @@ function Get-TunnelSummary([string]$Id) {
         Ports = $ports
         PublishedPorts = $ports -join ', '
         HostConnections = $hostConnections
-        CloudPcAgentReady = (2222 -in $ports) -and ($AgentChatPort -in $ports)
+        CloudPcAgentReady = if ($WebOnly) {
+            $AgentChatPort -in $ports
+        }
+        else {
+            (2222 -in $ports) -and ($AgentChatPort -in $ports)
+        }
     }
+}
+
+function Get-WindowsSshUser {
+    $upn = (& whoami.exe /upn 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0 -and $upn -match '^[^@\s]+@[^@\s]+$') {
+        return $upn
+    }
+    return [Security.Principal.WindowsIdentity]::GetCurrent().Name
 }
 
 if (-not $TunnelId) {
     $serverDir = Join-Path $HOME '.devbox-cli\server'
-    $ids = @(
-        Get-ChildItem $serverDir -Directory -ErrorAction SilentlyContinue |
-            Where-Object { Test-Path (Join-Path $_.FullName 'host.log') } |
-            ForEach-Object Name
-    )
+    $webTunnelFile = Join-Path $HOME '.cloudpc-agent\server\web-tunnel-id'
+    $ids = if ($WebOnly -and (Test-Path $webTunnelFile)) {
+        @((Get-Content $webTunnelFile -Raw).Trim())
+    }
+    else {
+        @(
+            Get-ChildItem $serverDir -Directory -ErrorAction SilentlyContinue |
+                Where-Object { Test-Path (Join-Path $_.FullName 'host.log') } |
+                ForEach-Object Name
+        )
+    }
     if ($ids.Count -eq 0) {
         throw "No configured Server tunnel was found under $serverDir"
     }
@@ -84,10 +104,13 @@ if (-not $TunnelId) {
     }
 }
 
-$windowsUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-$linuxUser = (& wsl.exe -d $Distro -- whoami 2>$null).Trim()
-if ($LASTEXITCODE -ne 0 -or -not $linuxUser) {
-    throw "Could not read the default user from WSL distro '$Distro'."
+$windowsUser = if ($WebOnly) { '' } else { Get-WindowsSshUser }
+$linuxUser = ''
+if (-not $WebOnly) {
+    $linuxUser = (& wsl.exe -d $Distro -- whoami 2>$null).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $linuxUser) {
+        throw "Could not read the default user from WSL distro '$Distro'."
+    }
 }
 
 $parts = $TunnelId.Split('.')
@@ -114,7 +137,15 @@ $ports = $tunnelSummary.Ports
 
 Write-Host 'Client install command:' -ForegroundColor Cyan
 $profileName = $env:COMPUTERNAME.ToLowerInvariant()
-Write-Host (
-    ".\install.ps1 -Client -Name '$profileName' -TunnelId '$TunnelId' " +
-    "-WindowsSshUser '$windowsUser' -LinuxSshUser '$linuxUser'"
-)
+if ($WebOnly) {
+    Write-Host (
+        ".\install.ps1 -Client -WebOnly -Name '$profileName' " +
+        "-TunnelId '$TunnelId'"
+    )
+}
+else {
+    Write-Host (
+        ".\install.ps1 -Client -Name '$profileName' -TunnelId '$TunnelId' " +
+        "-WindowsSshUser '$windowsUser' -LinuxSshUser '$linuxUser'"
+    )
+}

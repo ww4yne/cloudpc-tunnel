@@ -32,7 +32,7 @@
     overflow: hidden;
     background: var(--canvas);
     color: var(--ink);
-    font: 15px/1.55 var(--sans);
+    font: 13px/1.42 var(--sans);
     -webkit-font-smoothing: antialiased;
   }
 
@@ -41,7 +41,7 @@
 
   .app {
     display: grid;
-    grid-template-columns: 284px minmax(0, 1fr);
+    grid-template-columns: 200px minmax(0, 1fr);
     height: 100%;
   }
 
@@ -50,7 +50,7 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
-    padding: 22px 14px 16px;
+    padding: 10px 8px 8px;
     overflow: hidden;
     background:
       radial-gradient(circle at 20% 0%, rgba(59, 130, 246, .24), transparent 34%),
@@ -61,16 +61,16 @@
   .brand {
     display: flex;
     align-items: center;
-    gap: 11px;
-    padding: 0 8px 20px;
+    gap: 7px;
+    padding: 0 5px 9px;
   }
 
   .brand-mark, .agent-avatar {
     display: grid;
     place-items: center;
     flex: 0 0 auto;
-    width: 34px;
-    height: 34px;
+    width: 26px;
+    height: 26px;
     border-radius: 50%;
     background: linear-gradient(145deg, #5a8cff, #2c5de5);
     color: white;
@@ -79,21 +79,21 @@
 
   .brand-mark svg, .agent-avatar svg,
   .icon-button svg, .send-button svg {
-    width: 18px;
-    height: 18px;
+    width: 15px;
+    height: 15px;
   }
 
   .brand-copy strong, .brand-copy span { display: block; }
-  .brand-copy strong { font-size: 16px; letter-spacing: -.015em; }
-  .brand-copy span { margin-top: 1px; color: #9fb0d4; font-size: 11px; }
+  .brand-copy strong { font-size: 13px; letter-spacing: -.015em; }
+  .brand-copy span { margin-top: 0; color: #9fb0d4; font-size: 9px; }
 
   .new-task {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 7px;
     width: 100%;
-    margin: 0 0 18px;
-    padding: 10px 11px;
+    margin: 0 0 8px;
+    padding: 6px 7px;
     border: 0;
     border-top: 1px solid rgba(255, 255, 255, .14);
     border-bottom: 1px solid rgba(255, 255, 255, .14);
@@ -105,19 +105,19 @@
   .plus {
     display: grid;
     place-items: center;
-    width: 26px;
-    height: 26px;
+    width: 20px;
+    height: 20px;
     border-radius: 50%;
     background: #fff;
     color: var(--navy);
-    font-size: 19px;
+    font-size: 16px;
     line-height: 1;
   }
 
   .section-label {
-    padding: 0 10px 7px;
+    padding: 0 7px 4px;
     color: #7f91b8;
-    font-size: 10px;
+    font-size: 9px;
     font-weight: 700;
     letter-spacing: .13em;
     text-transform: uppercase;
@@ -134,11 +134,11 @@
   .session-row {
     position: relative;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 28px;
+    grid-template-columns: minmax(0, 1fr) 24px;
     align-items: center;
     width: 100%;
     margin: 1px 0;
-    padding: 9px 7px 9px 12px;
+    padding: 5px 4px 5px 8px;
     border: 0;
     border-left: 2px solid transparent;
     background: transparent;
@@ -157,18 +157,18 @@
   .session-copy strong, .session-copy span { display: block; }
   .session-copy strong {
     overflow: hidden;
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 560;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .session-copy span { margin-top: 2px; color: #8293b7; font-size: 10px; }
+  .session-copy span { margin-top: 1px; color: #8293b7; font-size: 9px; }
 
   .delete-session {
     display: grid;
     place-items: center;
-    width: 26px;
-    height: 26px;
+    width: 22px;
+    height: 22px;
     border: 0;
     border-radius: 50%;
     background: transparent;
@@ -188,10 +188,10 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 13px 9px 2px;
+    padding: 7px 5px 0;
     border-top: 1px solid rgba(255, 255, 255, .1);
     color: #8fa1c4;
-    font-size: 11px;
+    font-size: 9px;
   }
 
   .cloud-dot {
@@ -204,7 +204,7 @@
 
   .main {
     display: grid;
-    grid-template-rows: 68px minmax(0, 1fr) auto;
+    grid-template-rows: 46px minmax(0, 1fr) auto;
     min-width: 0;
     background: var(--canvas);
   }
@@ -213,8 +213,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 20px;
-    padding: 0 28px;
+    gap: 12px;
+    padding: 0 14px;
     border-bottom: 1px solid var(--line);
     background: rgba(255, 255, 255, .88);
     backdrop-filter: blur(18px);
@@ -224,7 +224,7 @@
   .task-title strong, .task-title span { display: block; }
   .task-title strong {
     overflow: hidden;
-    font-size: 15px;
+    font-size: 13px;
     font-weight: 650;
     letter-spacing: -.012em;
     text-overflow: ellipsis;
@@ -236,7 +236,7 @@
     margin-top: 1px;
     color: var(--muted);
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: 9px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -248,7 +248,7 @@
     align-items: center;
     gap: 7px;
     color: var(--muted);
-    font-size: 12px;
+    font-size: 10px;
   }
 
   .state-dot {
@@ -270,8 +270,8 @@
   .icon-button {
     display: grid;
     place-items: center;
-    width: 34px;
-    height: 34px;
+    width: 26px;
+    height: 26px;
     padding: 0;
     border: 1px solid var(--line);
     border-radius: 50%;
@@ -288,26 +288,26 @@
   }
 
   .conversation-inner {
-    width: min(860px, calc(100% - 48px));
+    width: min(720px, calc(100% - 24px));
     min-height: 100%;
     margin: 0 auto;
-    padding: 34px 0 150px;
+    padding: 12px 0 82px;
   }
 
   .welcome {
     display: grid;
     place-items: center;
-    min-height: calc(100vh - 250px);
+    min-height: calc(100vh - 145px);
     text-align: center;
   }
 
-  .welcome-content { max-width: 620px; }
+  .welcome-content { max-width: 480px; }
   .welcome-orb {
     display: grid;
     place-items: center;
-    width: 58px;
-    height: 58px;
-    margin: 0 auto 22px;
+    width: 36px;
+    height: 36px;
+    margin: 0 auto 9px;
     border-radius: 50%;
     background:
       radial-gradient(circle at 30% 25%, #8bb2ff, transparent 38%),
@@ -315,30 +315,30 @@
     color: white;
     box-shadow: 0 18px 40px rgba(38, 84, 190, .22);
   }
-  .welcome-orb svg { width: 28px; height: 28px; }
+  .welcome-orb svg { width: 18px; height: 18px; }
   .welcome h1 {
     margin: 0;
-    font-size: clamp(28px, 4vw, 42px);
+    font-size: clamp(21px, 3vw, 28px);
     font-weight: 680;
     letter-spacing: -.045em;
   }
   .welcome p {
-    margin: 12px auto 26px;
+    margin: 5px auto 10px;
     color: var(--muted);
-    font-size: 16px;
+    font-size: 12px;
   }
 
   .suggestions {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 0 24px;
-    max-width: 620px;
+    gap: 0 14px;
+    max-width: 480px;
     margin: 0 auto;
     text-align: left;
   }
 
   .suggestion {
-    padding: 12px 2px;
+    padding: 6px 2px;
     border: 0;
     border-bottom: 1px solid var(--line);
     background: transparent;
@@ -348,15 +348,15 @@
   .suggestion span {
     display: block;
     color: var(--muted);
-    font-size: 11px;
+    font-size: 9px;
   }
   .suggestion:hover { color: var(--blue); }
 
   .turn {
     display: grid;
-    grid-template-columns: 36px minmax(0, 1fr);
-    gap: 13px;
-    margin: 0 0 26px;
+    grid-template-columns: 26px minmax(0, 1fr);
+    gap: 8px;
+    margin: 0 0 12px;
   }
 
   .turn.user {
@@ -366,19 +366,19 @@
 
   .turn.user .message {
     max-width: min(720px, 86%);
-    padding: 11px 15px;
+    padding: 6px 10px;
     border: 1px solid #cedcff;
     border-radius: 18px 18px 5px 18px;
     background: var(--blue-soft);
   }
 
   .agent-avatar {
-    width: 30px;
-    height: 30px;
+    width: 22px;
+    height: 22px;
     margin-top: 2px;
     box-shadow: none;
   }
-  .agent-avatar svg { width: 15px; height: 15px; }
+  .agent-avatar svg { width: 12px; height: 12px; }
 
   .message {
     min-width: 0;
@@ -386,7 +386,7 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
-  .message p { margin: 0 0 12px; }
+  .message p { margin: 0 0 7px; }
   .message p:last-child { margin-bottom: 0; }
   .message code {
     padding: 2px 5px;
@@ -396,14 +396,14 @@
     font-size: .9em;
   }
   .message pre {
-    margin: 13px 0;
-    padding: 14px 16px;
+    margin: 8px 0;
+    padding: 9px 11px;
     overflow: auto;
     border: 1px solid #27334b;
     border-radius: 10px;
     background: #111827;
     color: #dbe5f6;
-    font: 12px/1.6 var(--mono);
+    font: 11px/1.5 var(--mono);
     white-space: pre;
   }
   .message pre code { padding: 0; background: transparent; color: inherit; }
@@ -411,10 +411,10 @@
   .activity {
     display: flex;
     align-items: center;
-    gap: 9px;
-    margin: -8px 0 22px 49px;
+    gap: 7px;
+    margin: -3px 0 10px 34px;
     color: var(--muted);
-    font-size: 12px;
+    font-size: 10px;
   }
   .spinner {
     width: 13px;
@@ -427,23 +427,23 @@
   @keyframes spin { to { transform: rotate(360deg); } }
 
   .error-message {
-    margin: 0 0 22px 49px;
+    margin: 0 0 10px 34px;
     color: var(--danger);
     font-size: 13px;
   }
 
   .composer-shell {
     position: relative;
-    padding: 12px 24px 20px;
+    padding: 5px 10px 7px;
     background: linear-gradient(180deg, rgba(247, 248, 251, 0), var(--canvas) 25%);
   }
 
   .composer {
-    width: min(880px, 100%);
+    width: min(740px, 100%);
     margin: 0 auto;
-    padding: 10px 10px 9px 16px;
+    padding: 5px 6px 5px 10px;
     border: 1px solid #cfd7e5;
-    border-radius: 20px;
+    border-radius: 15px;
     background: var(--surface);
     box-shadow: var(--shadow);
   }
@@ -451,9 +451,9 @@
   .composer textarea {
     display: block;
     width: 100%;
-    min-height: 28px;
-    max-height: 150px;
-    padding: 3px 3px 7px;
+    min-height: 20px;
+    max-height: 80px;
+    padding: 1px 2px 3px;
     resize: none;
     border: 0;
     outline: 0;
@@ -474,7 +474,7 @@
     overflow: hidden;
     color: var(--muted);
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: 9px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -483,8 +483,8 @@
     display: grid;
     place-items: center;
     flex: 0 0 auto;
-    width: 34px;
-    height: 34px;
+    width: 26px;
+    height: 26px;
     padding: 0;
     border: 0;
     border-radius: 50%;
@@ -495,9 +495,9 @@
   .send-button:disabled { background: #c8cfdb; cursor: default; }
 
   .composer-hint {
-    margin: 7px auto 0;
+    margin: 3px auto 0;
     color: #929baa;
-    font-size: 10px;
+    font-size: 9px;
     text-align: center;
   }
 

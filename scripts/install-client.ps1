@@ -1,12 +1,10 @@
 [CmdletBinding()]
 param(
     [string]$Name,
-    [Parameter(Mandatory)]
     [string]$TunnelId,
-    [Parameter(Mandatory)]
     [string]$WindowsSshUser,
-    [Parameter(Mandatory)]
     [string]$LinuxSshUser,
+    [switch]$WebOnly,
     [string]$WindowsSession = 'cloudpc',
     [string]$LinuxSession = 'cloudpc',
     [int]$WindowsSshPort = 22,
@@ -37,8 +35,8 @@ if ($Name -notmatch '^[A-Za-z0-9_.-]+$') {
     LinuxSshUser = $LinuxSshUser
     WindowsSession = $WindowsSession
     LinuxSession = $LinuxSession
-    WindowsSshPort = $WindowsSshPort
-    LinuxSshPort = $LinuxSshPort
+    WindowsSshPort = if ($WebOnly) { 0 } else { $WindowsSshPort }
+    LinuxSshPort = if ($WebOnly) { 0 } else { $LinuxSshPort }
     AgentChatPort = $AgentChatPort
 } | ConvertTo-Json |
     Set-Content (Join-Path $profilesDir "$Name.json") -Encoding UTF8

@@ -1,197 +1,388 @@
 # cloudpc-agent
 
-Fast prototype for three Windows 365 Cloud PC channels:
+Prototype for adding CLI and Web Chat entry points to an existing Windows 365
+Cloud PC:
 
 ```text
-cloudpc pwsh  -> Dev Tunnel -> Windows OpenSSH -> psmux
-cloudpc bash  -> Dev Tunnel -> WSL OpenSSH     -> tmux
-cloudpc agent -> private web chat -> Copilot CLI on the Cloud PC
+cloudpc pwsh  -> Azure Dev Tunnel -> Windows OpenSSH -> psmux -> PowerShell
+cloudpc bash  -> Azure Dev Tunnel -> WSL OpenSSH     -> tmux  -> Bash
+cloudpc agent -> Azure Dev Tunnel -> Web Chat        -> Copilot CLI
 ```
 
-The prototype is single-user and uses an existing private Microsoft Dev Tunnel.
-It is intended for demos and development, not production.
+The graphical Windows 365 session remains available. These additional paths let
+developers use native Windows and Linux terminals, and let other users delegate
+work through a browser.
 
-## One-hour demo setup
+> [!WARNING]
+> This is a single-user demo prototype, not a production service. Azure Dev
+> Tunnels is a development transport, Web Chat auto-approves Copilot CLI tool
+> calls, and Web Chat history is stored only in memory. Use a test Cloud PC and
+> do not expose the tunnel anonymously.
 
-The preferred path is the root installer.
+## Choose a test path
 
-Show the existing Cloud PC connection information at any time:
+Most testers only need Web Chat. Use the Web Chat-only path unless terminal
+access is part of the evaluation.
+
+| Path | Installs |
+| --- | --- |
+| **Web Chat-only (recommended)** | Node.js, Copilot CLI, Azure Dev Tunnel, Web Chat |
+| Full CLI + Web Chat | Everything above plus OpenSSH, WSL, psmux, and tmux |
+
+**Web Chat-only does not install or require OpenSSH, WSL, psmux, or tmux.**
+
+### Fast Web Chat-only setup
+
+On the Cloud PC:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\install.ps1 -Server -WebOnly
+```
+
+On the client, use the command printed by the Cloud PC:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\install.ps1 -Client -WebOnly `
+  -Name '<cloud-pc-name>' `
+  -TunnelId '<full-tunnel-id.cluster>'
+
+cloudpc agent
+```
+
+Continue with the full setup below only when PowerShell or WSL terminal access
+must also be tested.
+
+## What the test covers
+
+- selecting a configured Cloud PC profile;
+- connecting from a local terminal without streaming the full desktop;
+- persistent PowerShell sessions through psmux;
+- persistent WSL/Bash sessions through tmux;
+- Web Chat backed by Copilot CLI on the Cloud PC;
+- multiple independent Cloud PC profiles.
+
+## Prerequisites
+
+### Windows 365 Cloud PC (full CLI + Web Chat)
+
+- Windows 11 Cloud PC with administrator access;
+- a corporate tenant domain account and password for Windows SSH;
+- Windows PowerShell 5.1 or PowerShell 7;
+- WinGet;
+- permission to install Windows OpenSSH, Node.js, Copilot CLI, WSL, Ubuntu,
+  tmux, and the Azure Dev Tunnels CLI;
+- a Microsoft or GitHub identity that can create a private Azure Dev Tunnel;
+- a GitHub Copilot subscription and permission to authenticate Copilot CLI;
+- outbound access to GitHub, WinGet, Azure Dev Tunnels, and Copilot services.
+
+### Client PC (full CLI + Web Chat)
+
+- Windows 10 or Windows 11;
+- PowerShell;
+- OpenSSH Client;
+- WinGet;
+- the same Microsoft or GitHub identity used to access the private Dev Tunnel.
+
+The Cloud PC and client can be the same machine for initial validation, but the
+intended test uses a separate Windows client.
+
+> [!IMPORTANT]
+> The full CLI path requires Windows SSH authentication with the corporate
+> domain account and password. Configure the Windows SSH user as its UPN, such as
+> `user@tenant.example`. Do not use a local Windows account, SSH key, or personal
+> Microsoft account. WSL authentication is separate and uses the selected Linux
+> user's password.
+
+## Get the source
+
+The tester must first accept the invitation to the private GitHub repository.
+Clone the repository on both the Cloud PC and client:
+
+```powershell
+git clone https://github.com/ww4yne/cloudpc-agent.git
+Set-Location .\cloudpc-agent
+```
+
+Do not place secrets, tunnel tokens, or profile files in the repository.
+Runtime state is written under `%USERPROFILE%\.cloudpc-agent`.
+
+## Configure the Cloud PC
+
+Open an **elevated PowerShell** in the repository checkout:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\install.ps1 -Server -Distro Ubuntu
+```
+
+The installer is resumable. It:
+
+- installs Node.js and Copilot CLI when missing;
+- installs and configures Windows OpenSSH on loopback only;
+- installs psmux;
+- installs or detects WSL and Ubuntu;
+- configures WSL OpenSSH and tmux;
+- creates or reuses a private Azure Dev Tunnel;
+- publishes the Windows SSH, WSL SSH, and Web Chat channels;
+- authenticates Copilot CLI;
+- registers background tasks for the tunnel host and Web Chat;
+- verifies the required services.
+
+If WSL requests a reboot:
+
+1. Restart the Cloud PC.
+2. Launch Ubuntu once and complete its first-run user setup.
+3. Return to the repository in an elevated PowerShell.
+4. Run the same server command again.
+
+If the WSL user does not have a password, set one from elevated PowerShell:
+
+```powershell
+$linuxUser = (wsl.exe -d Ubuntu -- whoami).Trim()
+wsl.exe -d Ubuntu -u root -- passwd $linuxUser
+```
+
+At completion, record the values printed by the installer:
+
+```text
+Tunnel ID
+Windows SSH user
+WSL SSH user
+Suggested client install command
+```
+
+The Windows SSH user must be the corporate tenant account in UPN form, for
+example `user@tenant.example`, rather than a local account or SSH key.
+
+## Verify the Cloud PC
+
+Run:
 
 ```powershell
 .\install.ps1 -Status
 ```
 
-On the new Cloud PC, from an **elevated** PowerShell in the synced project:
+Expected:
 
-```powershell
-.\install.ps1 -Server -Distro Ubuntu
+```text
+PublishedPorts    : 22, 2222, 8787
+HostConnections   : 1
+CloudPcAgentReady : True
 ```
 
-If WSL requires a reboot, restart Windows, finish Ubuntu's first-run user setup,
-then run the same command again. The script is resumable and skips completed
-steps.
-
-On the client:
+Optional component checks:
 
 ```powershell
-.\install.ps1 -Client -Name '<cloud-pc-name>' `
-  -TunnelId '<full-id.cluster>' -WindowsSshUser 'DOMAIN\user' `
+Get-Service sshd
+Get-NetTCPConnection -State Listen -LocalPort 22,8787
+Test-NetConnection 127.0.0.1 -Port 2222
+wsl.exe -d Ubuntu -- sh -lc "systemctl is-active ssh; tmux -V"
+Invoke-RestMethod http://127.0.0.1:8787/api/health
+```
+
+Windows OpenSSH and Web Chat should listen only on loopback. Do not add a public
+inbound firewall rule for these services.
+
+## Configure the client
+
+Open PowerShell in the client checkout and run the command printed by the
+Cloud PC installer:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\install.ps1 -Client `
+  -Name '<cloud-pc-name>' `
+  -TunnelId '<full-tunnel-id.cluster>' `
+  -WindowsSshUser '<user@tenant.example>' `
   -LinuxSshUser '<wsl-user>'
 ```
 
-The detailed manual sequence below is retained for troubleshooting.
+The installer:
 
-### 1. Prepare the Cloud PC
+- installs Azure Dev Tunnels CLI when missing;
+- signs in to Azure Dev Tunnels when required;
+- creates an isolated client profile;
+- installs the `cloudpc` command under `%USERPROFILE%\bin`;
+- makes the new profile active.
 
-Open an elevated PowerShell:
+If `%USERPROFILE%\bin` is not already on `PATH`, reopen PowerShell after the
+installer completes.
+
+## Test flow
+
+### Confirm the profile and connection
 
 ```powershell
-winget install --id OpenJS.NodeJS.LTS -e
-winget install --id GitHub.Copilot -e
-wsl --install -d Ubuntu
+cloudpc list
+cloudpc status
 ```
 
-Restart Windows if WSL requests it, then update WSL:
+`cloudpc status` displays the active profile and local forwarded ports. The
+local ports can change between connector sessions; callers should not assume
+fixed client-side port numbers.
+
+### Test PowerShell and psmux
 
 ```powershell
-wsl --update
+cloudpc pwsh -Session demo
 ```
 
-Install the current secure Windows terminal foundation:
+After entering the Windows SSH password:
 
 ```powershell
-irm https://raw.githubusercontent.com/ww4yne/devbox-cli/main/install.ps1 | iex
+$env:COMPUTERNAME
+copilot
 ```
 
-Choose **Server** and record the complete private tunnel ID, including its
-cluster suffix.
-
-This bootstrap installs/configures Windows OpenSSH, psmux, and Dev Tunnel. On a
-Windows 365 Cloud PC it currently disables guest hibernation so the tunnel
-remains reachable without Windows App. This is a demo/personal-tool behavior,
-not the intended long-term product lifecycle model.
-
-Authenticate Copilot CLI on the Cloud PC:
+Start a visible Copilot task, close the local Terminal window, then reconnect:
 
 ```powershell
-copilot login
+cloudpc pwsh -Session demo
 ```
 
-### 2. Configure WSL and Agent Chat
+The same psmux-owned PowerShell and Copilot CLI session should reappear.
 
-From the local source checkout:
+### Test WSL, Bash, and tmux
 
 ```powershell
-.\scripts\setup-host.ps1 -TunnelId <full-tunnel-id> -Distro Ubuntu
-.\scripts\start-host.ps1 -Distro Ubuntu
+cloudpc bash -Session demo
 ```
 
-The setup script:
+After entering the WSL SSH password:
 
-- configures WSL OpenSSH on port 2222;
-- installs/enables tmux and sshd inside the selected WSL distro;
-- publishes tunnel ports 2222 and 8787;
-- verifies Node.js and Copilot CLI for Agent Chat.
-
-If the WSL user does not already have an SSH password:
-
-```powershell
-$linuxUser = wsl.exe -d Ubuntu -- whoami
-wsl.exe -d Ubuntu -u root -- passwd $linuxUser
+```bash
+hostname
+uname -a
+git --version
+node --version
+python3 --version
+copilot
 ```
 
-After adding ports, restart the existing Dev Tunnel host task so it reloads the
-port set:
+Close the client terminal and rerun the same `cloudpc bash -Session demo`
+command. The tmux-owned Bash and Copilot CLI session should reappear.
+
+### Test Web Chat
 
 ```powershell
-$task = Get-ScheduledTask -TaskName 'DevboxCliHost-*'
-$task | Stop-ScheduledTask
-$task | Start-ScheduledTask
+cloudpc agent
 ```
 
-### 3. Verify the Cloud PC
+The command opens Web Chat in an Edge app window. Create a task such as:
 
-```powershell
-.\scripts\show-connection.ps1
-Get-NetTCPConnection -State Listen -LocalPort 22,8787
-Test-NetConnection 127.0.0.1 -Port 2222
-wsl.exe -d Ubuntu -- sh -lc "systemctl is-active ssh; tmux -V; ss -ltn | grep ':2222 '"
-Invoke-RestMethod http://127.0.0.1:8787/api/health
-devtunnel port list <full-tunnel-id>
-devtunnel show <full-tunnel-id>
+```text
+Collect the Cloud PC hostname, Windows version, current time, and free disk
+space. Create a self-contained HTML report in my OneDrive folder. Do not include
+usernames, tenant information, tunnel IDs, URLs, or secrets.
 ```
 
-Expected ports:
+The task runs on the Cloud PC. If the Cloud PC and client use the same OneDrive
+account, the generated artifact should synchronize naturally to the client.
 
-| Port | Service |
-|---:|---|
-| 22 | Windows OpenSSH |
-| 2222 | WSL OpenSSH |
-| 8787 | Agent Chat |
+## Multiple Cloud PCs
 
-### 4. Configure the client
-
-On the client:
+Each Cloud PC is stored as an independent local profile:
 
 ```powershell
-.\scripts\install-client.ps1 -TunnelId <full-tunnel-id> `
-  -WindowsSshUser 'DOMAIN\user' -LinuxSshUser '<wsl-user>'
-
+cloudpc list
+cloudpc use <profile>
 cloudpc pwsh
 cloudpc bash
 cloudpc agent
-cloudpc status
-cloudpc reconnect
-cloudpc disconnect
-cloudpc list
-cloudpc use <name>
 ```
 
-On Windows, `cloudpc agent` opens Agent Chat in Edge app mode for a clean,
-browser-chrome-free workspace.
-
-`reconnect` and `disconnect` affect only the local Dev Tunnel connector. They
-never restart or stop the Cloud PC, remote agent, or persistent sessions.
-
-Multiple Cloud PCs are stored as independent profiles:
+An action can also target a profile without changing the active profile:
 
 ```powershell
-cloudpc list
-cloudpc use engineering
-cloudpc pwsh
-cloudpc bash testbox
-cloudpc agent testbox
-cloudpc pwsh -Session project-a
-cloudpc bash -Session project-a
+cloudpc pwsh <profile> -Session project-a
+cloudpc bash <profile> -Session project-a
+cloudpc agent <profile>
 ```
 
-## Agent Chat implementation
+If the active profile's tunnel is offline, the client presents profile-aware
+target choices. It does not silently rebind a profile to another Cloud PC.
 
-The web service has no npm dependencies. It runs Copilot CLI in prompt mode:
+## Commands
 
-```text
-copilot --prompt ... --session-id ... --output-format json --stream on
-```
+| Command | Purpose |
+| --- | --- |
+| `cloudpc pwsh [-Session name]` | Open or reattach a Windows psmux session |
+| `cloudpc bash [-Session name]` | Open or reattach a WSL tmux session |
+| `cloudpc agent` | Open Web Chat |
+| `cloudpc status` | Show active profile and connector status |
+| `cloudpc list` | List configured Cloud PC profiles |
+| `cloudpc use <profile>` | Change the active profile |
+| `cloudpc reconnect` | Restart only the local Dev Tunnel connector |
+| `cloudpc disconnect` | Stop only the local Dev Tunnel connector |
 
-The browser composes text locally, submits one request, receives structured
-events over SSE, and can reconnect to the in-memory session history. Copilot
-remote export/control is explicitly disabled.
+`reconnect` and `disconnect` do not restart the Cloud PC or stop remote
+psmux/tmux sessions.
 
-For the demo, tool calls are auto-approved with `--allow-all-tools`. This is not
-the final enterprise permission model.
+## Troubleshooting
 
-## Current limitations
+### `cloudpc` is not recognized
 
-- Single Cloud PC and single user.
-- Dev Tunnel preview/dev-test transport.
-- Agent Chat history is retained only while the Node host process is running.
-- No Entra/RBAC control plane beyond private Dev Tunnel access.
-- No terminal/web handoff for the same Copilot session.
-- WSL lifecycle still depends on the Windows host starting the distro.
+Reopen PowerShell. Confirm `%USERPROFILE%\bin` is on `PATH` and contains
+`cloudpc.cmd` and `cloudpc.ps1`.
 
-The selected WSL user must have either a password or an authorized SSH key.
-For the fastest clean-machine demo, set a password from an elevated PowerShell:
+### Windows SSH login fails
+
+- Confirm the Windows SSH user is the corporate tenant UPN.
+- Enter the corporate domain-account password when prompted.
+- Do not use a local account, personal account, or SSH key.
+- Run `.\install.ps1 -Status` on the Cloud PC.
+- Confirm `Get-Service sshd` reports `Running`.
+- The client intentionally disables public-key authentication and requests
+  password or keyboard-interactive authentication to match tenant policy.
+
+### WSL SSH login fails
 
 ```powershell
-wsl.exe -d Ubuntu -u root -- passwd <wsl-user>
+Test-NetConnection 127.0.0.1 -Port 2222
+wsl.exe -d Ubuntu -- systemctl status ssh
 ```
+
+Set the WSL user's password if required, then retry.
+
+### Web Chat does not open
+
+On the Cloud PC:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8787/api/health
+Get-ScheduledTask -TaskName CloudPcAgentChat
+```
+
+Then run `cloudpc reconnect` on the client.
+
+### The configured tunnel is offline
+
+Run the requested `cloudpc` command again. The client checks the configured
+tunnel and presents explicit target choices when another known Cloud PC is
+online.
+
+## Security and limitations
+
+- single-user, single-tenant prototype;
+- private Azure Dev Tunnel only; never enable anonymous access;
+- Azure Dev Tunnels is preview/dev-test technology without a production SLA;
+- Web Chat has no separate application-level identity or RBAC layer;
+- Web Chat uses Copilot CLI `--allow-all-tools` for the controlled demo;
+- Web Chat session history is lost when the Node host restarts;
+- psmux and tmux protect against client disconnects, not a Cloud PC reboot;
+- no durable audit, enterprise policy, permission approval, or recovery plane;
+- current bootstrap depends on `ww4yne/devbox-cli` for the Windows foundation.
+
+Use only test repositories and non-sensitive data when evaluating this
+prototype.
+
+## Development checks
+
+```powershell
+npm run check
+```
+
+The project has no runtime npm dependencies. `npm run check` validates the Node
+server syntax.
