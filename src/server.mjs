@@ -11,6 +11,16 @@ const host = process.env.CLOUDPC_AGENT_HOST || '127.0.0.1';
 const port = Number(process.env.CLOUDPC_AGENT_PORT || 8787);
 const copilot = process.env.COPILOT_BIN || 'copilot';
 const defaultCwd = process.env.CLOUDPC_AGENT_CWD || process.cwd();
+const powershell = process.env.CLOUDPC_POWERSHELL_BIN || [
+  join(process.env.ProgramFiles || '', 'PowerShell', '7', 'pwsh.exe'),
+  join(
+    process.env.SystemRoot || 'C:\\Windows',
+    'System32',
+    'WindowsPowerShell',
+    'v1.0',
+    'powershell.exe'
+  ),
+].find(candidate => candidate && existsSync(candidate)) || 'powershell.exe';
 const sessions = new Map();
 const terminal = {
   child: null,
@@ -124,7 +134,7 @@ function terminalSummary() {
 function startTerminal() {
   if (terminal.child && !terminal.child.killed) return terminal.child;
 
-  const child = spawn('pwsh.exe', [
+  const child = spawn(powershell, [
     '-NoLogo',
     '-NoProfile',
     '-NoExit',
