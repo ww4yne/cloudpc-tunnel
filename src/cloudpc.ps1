@@ -245,7 +245,8 @@ function Get-ConnectorProcess {
         $metadata = Get-Content $processFile -Raw | ConvertFrom-Json
         $process = Get-Process -Id ([int]$metadata.ProcessId) -ErrorAction SilentlyContinue
         if (-not $process) { return $null }
-        if ($process.Path -ne $metadata.ExecutablePath) { return $null }
+        $metadataPath = [string]$metadata.ExecutablePath
+        if ($metadataPath -and $process.Path -ne $metadataPath) { return $null }
         if ($process.StartTime.ToUniversalTime().Ticks -ne [long]$metadata.StartTimeUtcTicks) {
             return $null
         }
@@ -388,7 +389,7 @@ function Start-Connector([int[]]$RequiredHostPorts) {
     $process.Refresh()
     [ordered]@{
         ProcessId = $process.Id
-        ExecutablePath = $process.Path
+        ExecutablePath = if ($process.Path) { $process.Path } else { $exe }
         StartTimeUtcTicks = $process.StartTime.ToUniversalTime().Ticks
     } | ConvertTo-Json | Set-Content $processFile -Encoding UTF8
 

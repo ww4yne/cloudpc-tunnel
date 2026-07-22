@@ -12,6 +12,13 @@ const port = Number(process.env.CLOUDPC_AGENT_PORT || 8787);
 const copilot = process.env.COPILOT_BIN || 'copilot';
 const defaultCwd = process.env.CLOUDPC_AGENT_CWD || process.cwd();
 const sessions = new Map();
+const terminal = {
+  child: null,
+  status: 'stopped',
+  events: [],
+  clients: new Set(),
+  seq: 0,
+};
 
 function json(res, status, body) {
   res.writeHead(status, {
@@ -92,6 +99,83 @@ function pushEvent(session, kind, data) {
   const frame = `data: ${JSON.stringify(event)}\n\n`;
   for (const client of session.clients) client.write(frame);
 }
+
+function pushTerminalEvent(kind, text) {
+  const event = {
+    seq: ++terminal.seq,
+    at: Date.now(),
+    kind,
+    text: String(text || ''),
+  };
+  terminal.events.push(event);
+  if (terminal.events.length > 1500) terminal.events.splice(0, 300);
+  const frame = `data: ${JSON.stringify(event)}\n\n`;
+  for (const client of terminal.clients) client.write(frame);
+}
+
+function terminalSummary() {
+  return {
+    status: terminal.status,
+    cwd: defaultCwd,
+    events: terminal.events,
+  };
+}
+
+function startTerminal() {
+  if (terminal.child && !terminal.child.killed) return terminal.child;
+
+  const child = spawn('pwsh.exe', [
+    '-NoLogo',
+    '-NoProfile',
+    '-NoExit',
+    '-Command',
+    '-',
+  ], {
+    cwd: defaultCwd,
+    windowsHide: true,
+    env: {
+      ...process.env,
+      NO_COLOR: '1',
+    },
+  });
+
+  terminal.child = child;
+  terminal.status = 'running';
+  pushTerminalEvent('status', 'PowerShell connected');
+
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', chunk => pushTerminalEvent('output', chunk));
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', chunk => pushTerminalEvent('error', chunk));
+  child.on('error', error => {
+    pushTerminalEvent('error', `${error.message}\n`);
+  });
+  child.on('close', code => {
+    if (terminal.child !== child) return;
+    terminal.child = null;
+    terminal.status = 'stopped';
+    pushTerminalEvent('status', `PowerShell exited with code ${code}`);
+  });
+
+  const escapedCwd = defaultCwd.replace(/'/g, "''");
+  child.stdin.write(
+    "[Console]::OutputEncoding = [Text.UTF8Encoding]::new(); " +
+    "$OutputEncoding = [Console]::OutputEncoding; " +
+    `Set-Location '${escapedCwd}'; ` +
+    "Write-Output ('Connected to ' + $env:COMPUTERNAME); " +
+    "Write-Output ('Working directory: ' + (Get-Location).Path)\r\n"
+  );
+  return child;
+}
+
+function stopTerminal() {
+  const child = terminal.child;
+  terminal.child = null;
+  terminal.status = 'stopped';
+  if (child && !child.killed) child.kill();
+}
+
+process.on('exit', stopTerminal);
 
 function extractText(value) {
   if (typeof value === 'string') return value;
@@ -255,6 +339,60 @@ const server = createServer(async (req, res) => {
       json(res, 200, {
         sessions: [...sessions.values()].map(summary).sort((a, b) => b.updatedAt - a.updatedAt),
       });
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/terminal') {
+      startTerminal();
+      json(res, 200, terminalSummary());
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/terminal/events') {
+      startTerminal();
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        'connection': 'keep-alive',
+        'x-accel-buffering': 'no',
+      });
+      res.write('retry: 1500\n\n');
+      for (const event of terminal.events) {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      }
+      terminal.clients.add(res);
+      const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
+      req.on('close', () => {
+        clearInterval(heartbeat);
+        terminal.clients.delete(res);
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/terminal/input') {
+      const body = await readBody(req);
+      const input = String(body.input || '').trimEnd();
+      if (!input) {
+        json(res, 400, { error: 'terminal input is required' });
+        return;
+      }
+      if (input.length > 8192) {
+        json(res, 400, { error: 'terminal input is too long' });
+        return;
+      }
+      const child = startTerminal();
+      pushTerminalEvent('input', input);
+      child.stdin.write(`${input}\r\n`);
+      json(res, 202, { ok: true, status: terminal.status });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/terminal/restart') {
+      stopTerminal();
+      terminal.events = [];
+      terminal.seq = 0;
+      startTerminal();
+      json(res, 202, terminalSummary());
       return;
     }
 

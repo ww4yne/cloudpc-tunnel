@@ -24,6 +24,7 @@
   }
 
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
 
   html, body { width: 100%; height: 100%; }
 
@@ -242,6 +243,29 @@
   }
 
   .top-actions { display: flex; align-items: center; gap: 10px; }
+
+  .mode-switch {
+    display: flex;
+    padding: 2px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #f0f2f6;
+  }
+
+  .mode-button {
+    padding: 4px 9px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 10px;
+  }
+
+  .mode-button.active {
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: 0 1px 4px rgba(26, 42, 78, .12);
+  }
 
   .run-state {
     display: flex;
@@ -501,6 +525,71 @@
     text-align: center;
   }
 
+  .terminal-panel {
+    min-height: 0;
+    padding: 10px;
+    overflow: hidden;
+    background: #0d1117;
+  }
+
+  .terminal-output {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 13px 15px;
+    overflow: auto;
+    border: 1px solid #273142;
+    border-radius: 8px;
+    background: #0b0f14;
+    color: #d6deeb;
+    font: 12px/1.55 var(--mono);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .terminal-shell {
+    padding: 7px 10px 9px;
+    border-top: 1px solid #253044;
+    background: #111827;
+  }
+
+  .terminal-command {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    width: min(900px, 100%);
+    margin: 0 auto;
+  }
+
+  .terminal-prompt {
+    color: #75d99b;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  .terminal-input {
+    min-width: 0;
+    padding: 7px 9px;
+    border: 1px solid #38445a;
+    border-radius: 6px;
+    outline: 0;
+    background: #0b0f14;
+    color: #eef3fb;
+    font: 12px/1.4 var(--mono);
+  }
+
+  .terminal-input:focus { border-color: #6089e8; }
+
+  .terminal-send {
+    padding: 7px 11px;
+    border: 0;
+    border-radius: 6px;
+    background: var(--blue);
+    color: white;
+    font-size: 11px;
+  }
+
   @media (max-width: 760px) {
     .app { grid-template-columns: 1fr; }
     .sidebar { display: none; }
@@ -550,6 +639,10 @@
         <span id="task-workspace">Cloud PC workspace</span>
       </div>
       <div class="top-actions">
+        <div class="mode-switch">
+          <button class="mode-button active" id="chat-mode">Chat</button>
+          <button class="mode-button" id="terminal-mode">Terminal</button>
+        </div>
         <div class="run-state" id="run-state">
           <span class="state-dot"></span>
           <span id="state-text">Ready</span>
@@ -559,6 +652,14 @@
             <rect x="7" y="7" width="10" height="10" rx="1"/>
           </svg>
         </button>
+        <button class="icon-button" id="restart-terminal"
+          title="Restart PowerShell" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2">
+            <path d="M20 11a8 8 0 1 0-2.3 5.7"/>
+            <path d="M20 4v7h-7"/>
+          </svg>
+        </button>
       </div>
     </header>
 
@@ -566,7 +667,11 @@
       <div class="conversation-inner" id="conversation-inner"></div>
     </section>
 
-    <footer class="composer-shell">
+    <section class="terminal-panel" id="terminal-panel" hidden>
+      <pre class="terminal-output" id="terminal-output"></pre>
+    </section>
+
+    <footer class="composer-shell" id="chat-composer">
       <div class="composer">
         <textarea id="prompt" rows="1"
           placeholder="Ask the Cloud PC to code, build, validate, or investigate..."></textarea>
@@ -581,6 +686,16 @@
       </div>
       <div class="composer-hint">Enter to send. Shift+Enter for a new line. You can close this page while the task runs.</div>
     </footer>
+
+    <footer class="terminal-shell" id="terminal-shell" hidden>
+      <div class="terminal-command">
+        <span class="terminal-prompt">PS&gt;</span>
+        <input class="terminal-input" id="terminal-input"
+          autocomplete="off" spellcheck="false"
+          placeholder="Run a PowerShell command on your Cloud PC">
+        <button class="terminal-send" id="terminal-send">Run</button>
+      </div>
+    </footer>
   </main>
 </div>
 
@@ -593,6 +708,11 @@
     assistantText: '',
     assistantMessage: null,
     activity: null,
+    mode: 'chat',
+    terminalSource: null,
+    terminalSeen: new Set(),
+    terminalHistory: [],
+    terminalHistoryIndex: 0,
   };
 
   const el = id => document.getElementById(id);
@@ -649,9 +769,75 @@
       idle: 'Ready',
     };
     el('state-text').textContent = labels[status] || 'Ready';
-    el('stop').hidden = status !== 'running';
+    el('stop').hidden = state.mode === 'terminal' || status !== 'running';
     el('send').disabled = status === 'running';
     el('prompt').disabled = status === 'running';
+  }
+
+  function cleanTerminalText(value) {
+    return String(value || '')
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+      .replace(/\r/g, '');
+  }
+
+  function appendTerminalEvent(event) {
+    if (state.terminalSeen.has(event.seq)) return;
+    state.terminalSeen.add(event.seq);
+    const output = el('terminal-output');
+    if (event.kind === 'input') {
+      output.textContent += `\nPS> ${event.text}\n`;
+    } else if (event.kind === 'status') {
+      output.textContent += `\n[${event.text}]\n`;
+    } else {
+      output.textContent += cleanTerminalText(event.text);
+    }
+    output.scrollTop = output.scrollHeight;
+  }
+
+  async function connectTerminal() {
+    state.terminalSource?.close();
+    state.terminalSeen.clear();
+    el('terminal-output').textContent = '';
+    const snapshot = await api('/api/terminal');
+    for (const event of snapshot.events) appendTerminalEvent(event);
+    state.terminalSource = new EventSource('/api/terminal/events');
+    state.terminalSource.onmessage = message => {
+      appendTerminalEvent(JSON.parse(message.data));
+    };
+  }
+
+  async function setMode(mode) {
+    state.mode = mode;
+    const terminalMode = mode === 'terminal';
+    el('chat-mode').classList.toggle('active', !terminalMode);
+    el('terminal-mode').classList.toggle('active', terminalMode);
+    el('conversation').hidden = terminalMode;
+    el('chat-composer').hidden = terminalMode;
+    el('terminal-panel').hidden = !terminalMode;
+    el('terminal-shell').hidden = !terminalMode;
+    el('run-state').hidden = terminalMode;
+    el('stop').hidden = terminalMode || state.active?.status !== 'running';
+    el('restart-terminal').hidden = !terminalMode;
+    el('new-task').hidden = terminalMode;
+
+    if (terminalMode) {
+      el('task-name').textContent = 'Cloud PC PowerShell';
+      el('task-workspace').textContent =
+        'Entra access through private Azure Dev Tunnel';
+      await connectTerminal();
+      el('terminal-input').focus();
+    } else {
+      state.terminalSource?.close();
+      state.terminalSource = null;
+      if (state.active) {
+        el('task-name').textContent = state.active.name;
+        el('task-workspace').textContent = state.active.cwd;
+      } else {
+        el('task-name').textContent = 'New engineering task';
+        el('task-workspace').textContent = 'Cloud PC workspace';
+      }
+      el('prompt').focus();
+    }
   }
 
   function renderWelcome() {
@@ -886,6 +1072,18 @@
     }
   }
 
+  async function sendTerminalInput() {
+    const input = el('terminal-input').value.trim();
+    if (!input) return;
+    state.terminalHistory.push(input);
+    state.terminalHistoryIndex = state.terminalHistory.length;
+    el('terminal-input').value = '';
+    await api('/api/terminal/input', {
+      method: 'POST',
+      body: JSON.stringify({ input }),
+    });
+  }
+
   function resizePrompt() {
     const prompt = el('prompt');
     prompt.style.height = 'auto';
@@ -893,6 +1091,8 @@
   }
 
   el('new-task').onclick = newTask;
+  el('chat-mode').onclick = () => setMode('chat');
+  el('terminal-mode').onclick = () => setMode('terminal');
   el('send').onclick = sendPrompt;
   el('prompt').oninput = resizePrompt;
   el('prompt').onkeydown = event => {
@@ -906,6 +1106,31 @@
     await api(`/api/sessions/${state.active.id}/abort`, {
       method: 'POST', body: '{}',
     });
+  };
+  el('terminal-send').onclick = sendTerminalInput;
+  el('terminal-input').onkeydown = event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      sendTerminalInput().catch(error => {
+        el('terminal-output').textContent += `\n[${error.message}]\n`;
+      });
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (state.terminalHistoryIndex > 0) state.terminalHistoryIndex--;
+      el('terminal-input').value =
+        state.terminalHistory[state.terminalHistoryIndex] || '';
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      if (state.terminalHistoryIndex < state.terminalHistory.length) {
+        state.terminalHistoryIndex++;
+      }
+      el('terminal-input').value =
+        state.terminalHistory[state.terminalHistoryIndex] || '';
+    }
+  };
+  el('restart-terminal').onclick = async () => {
+    await api('/api/terminal/restart', { method: 'POST', body: '{}' });
+    await connectTerminal();
   };
 
   (async () => {

@@ -61,6 +61,7 @@ must also be tested.
 - persistent PowerShell sessions through psmux;
 - persistent WSL/Bash sessions through tmux;
 - Web Chat backed by Copilot CLI on the Cloud PC;
+- experimental Entra-gated Web Terminal backed by persistent PowerShell;
 - multiple independent Cloud PC profiles.
 
 ## Prerequisites
@@ -281,6 +282,16 @@ usernames, tenant information, tunnel IDs, URLs, or secrets.
 The task runs on the Cloud PC. If the Cloud PC and client use the same OneDrive
 account, the generated artifact should synchronize naturally to the client.
 
+### Test Web Terminal
+
+Open `cloudpc agent`, then select **Terminal**. The browser is authenticated by
+the private Azure Dev Tunnel and sends PowerShell commands over HTTPS/SSE to a
+persistent PowerShell process on the Cloud PC.
+
+This dependency-free demo supports normal PowerShell commands and noninteractive
+Copilot CLI prompt mode. It doesn't yet provide ConPTY, full terminal escape
+handling, or the interactive Copilot CLI TUI.
+
 ## Multiple Cloud PCs
 
 Each Cloud PC is stored as an independent local profile:
@@ -369,6 +380,7 @@ online.
 - private Azure Dev Tunnel only; never enable anonymous access;
 - Azure Dev Tunnels is preview/dev-test technology without a production SLA;
 - Web Chat has no separate application-level identity or RBAC layer;
+- Web Terminal is a controlled demo shell with arbitrary command execution;
 - Web Chat uses Copilot CLI `--allow-all-tools` for the controlled demo;
 - Web Chat session history is lost when the Node host restarts;
 - psmux and tmux protect against client disconnects, not a Cloud PC reboot;
