@@ -897,20 +897,19 @@ Subsystem sftp sftp-server.exe
     & $sshKeygen -A
     if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen -A failed.' }
 
-    # Windows sshd runs as SYSTEM and rejects private host keys with inherited
-    # or broad ACLs. Half-initialized capability installs commonly leave these
-    # files with the elevated user's inherited permissions.
-    Write-Host 'Securing OpenSSH config and host key ACLs...' -ForegroundColor DarkCyan
-    & icacls $configPath /inheritance:r `
-        /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to secure sshd_config ACL.' }
-    foreach ($key in Get-ChildItem (Split-Path $configPath -Parent) `
-        -Filter 'ssh_host_*_key' -File -ErrorAction SilentlyContinue) {
-        & icacls $key.FullName /remove:g 'NT SERVICE\sshd' | Out-Null
-        & icacls $key.FullName /inheritance:r `
-            /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
+    Write-Host 'Checking OpenSSH host key permissions...' -ForegroundColor DarkCyan
+    $fixPermissions = Join-Path $openSshDir 'FixHostFilePermissions.ps1'
+    if (Test-Path $fixPermissions) {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File $fixPermissions -Confirm:$false | Out-Host
         if ($LASTEXITCODE -ne 0) {
-            throw "Failed to secure host key ACL: $($key.FullName)"
+            throw "OpenSSH host key permission repair failed: $fixPermissions"
+        }
+    }
+    else {
+        foreach ($key in Get-ChildItem (Split-Path $configPath -Parent) `
+            -Filter 'ssh_host_*_key' -File -ErrorAction SilentlyContinue) {
+            & icacls $key.FullName /remove:g 'NT SERVICE\sshd' | Out-Null
         }
     }
 
