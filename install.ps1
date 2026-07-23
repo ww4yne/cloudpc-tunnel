@@ -55,6 +55,14 @@ function Read-YesNo([string]$Prompt, [bool]$Default = $false) {
     } while ($true)
 }
 
+function Get-WindowsSshUser {
+    $whoami = (& whoami.exe 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0 -and $whoami) {
+        return $whoami
+    }
+    return [Security.Principal.WindowsIdentity]::GetCurrent().Name
+}
+
 function Read-Menu([string]$Prompt, [string[]]$Choices, [int]$Default = 1) {
     Write-Host ''
     Write-Host $Prompt -ForegroundColor Cyan
@@ -190,14 +198,6 @@ function Assert-Administrator {
     )) {
         throw 'Host setup must run from an elevated PowerShell.'
     }
-}
-
-function Get-WindowsSshUser {
-    $whoami = (& whoami.exe 2>$null | Out-String).Trim()
-    if ($LASTEXITCODE -eq 0 -and $whoami) {
-        return $whoami
-    }
-    return [Security.Principal.WindowsIdentity]::GetCurrent().Name
 }
 
 function Install-WingetPackage([string]$Id, [string]$CommandName) {
