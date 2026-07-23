@@ -289,6 +289,17 @@ function Get-CreatedTunnelId($Created) {
     return $selectedTunnel
 }
 
+function ConvertFrom-DevtunnelJsonOutput([object[]]$Output) {
+    $text = ($Output | ForEach-Object { "$_" }) -join [Environment]::NewLine
+    $start = $text.IndexOf('{')
+    $end = $text.LastIndexOf('}')
+    if ($start -lt 0 -or $end -lt $start) {
+        throw 'Dev Tunnel command did not return a JSON object.'
+    }
+    $json = $text.Substring($start, $end - $start + 1)
+    return $json | ConvertFrom-Json
+}
+
 function Ensure-LinkTunnel([int[]]$Ports) {
     if ('ssh-jump' -in $Transport) {
         throw 'SSH jump host transport is planned but not implemented in this preview. Select Microsoft Dev Tunnels for this version.'
@@ -331,15 +342,7 @@ function Ensure-LinkTunnel([int[]]$Ports) {
             if ($createOutput) { Write-Host ($createOutput -join [Environment]::NewLine) }
             throw 'Failed to create Dev Tunnel.'
         }
-        $jsonLine = @(
-            $createOutput |
-                Where-Object { "$_".TrimStart().StartsWith('{') } |
-                Select-Object -First 1
-        )
-        if (-not $jsonLine) {
-            throw 'Dev Tunnel was created but JSON output was not returned.'
-        }
-        $created = $jsonLine | ConvertFrom-Json
+        $created = ConvertFrom-DevtunnelJsonOutput $createOutput
         $selectedTunnel = Normalize-TunnelId (Get-CreatedTunnelId $created)
     }
     $selectedTunnel = Normalize-TunnelId $selectedTunnel
