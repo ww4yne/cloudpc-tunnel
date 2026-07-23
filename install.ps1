@@ -285,6 +285,28 @@ function Ensure-DevtunnelLogin {
     }
 }
 
+function Test-DevtunnelAuthError([object[]]$Output) {
+    $text = ($Output | ForEach-Object { "$_" }) -join [Environment]::NewLine
+    return $text -match '(?i)(login token expired|login required|not logged|not authenticated|unauthorized|forbidden)'
+}
+
+function Invoke-DevtunnelWithLoginRetry([string[]]$Arguments) {
+    $output = @(& devtunnel @Arguments 2>&1)
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0 -and (Test-DevtunnelAuthError $output)) {
+        Write-Host 'Dev Tunnels login expired. Please complete the login flow.' `
+            -ForegroundColor Yellow
+        & devtunnel user login
+        if ($LASTEXITCODE -ne 0) { throw 'Dev Tunnel login failed.' }
+        $output = @(& devtunnel @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    }
+    [pscustomobject]@{
+        ExitCode = $exitCode
+        Output = $output
+    }
+}
+
 function Get-CreatedTunnelId($Created) {
     $selectedTunnel = Normalize-TunnelId $Created
     if (-not $selectedTunnel) {
@@ -326,8 +348,8 @@ function Ensure-LinkTunnel([int[]]$Ports) {
         }
     }
     if ($selectedTunnel) {
-        $document = & devtunnel show $selectedTunnel --json 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not $document) {
+        $showResult = Invoke-DevtunnelWithLoginRetry @('show', $selectedTunnel, '--json')
+        if ($showResult.ExitCode -ne 0 -or -not $showResult.Output) {
             if ($TunnelId) {
                 throw "Configured Dev Tunnel was not found: $selectedTunnel"
             }
@@ -339,21 +361,32 @@ function Ensure-LinkTunnel([int[]]$Ports) {
     }
     else {
         Write-Step 'Creating private cloudpc-tunnel'
-        $createOutput = @(
-            & devtunnel create --description 'cloudpc-tunnel private TCP tunnel' --json 2>&1
+        $createResult = Invoke-DevtunnelWithLoginRetry @(
+            'create',
+            '--description',
+            'cloudpc-tunnel private TCP tunnel',
+            '--json'
         )
-        if ($LASTEXITCODE -ne 0) {
-            if ($createOutput) { Write-Host ($createOutput -join [Environment]::NewLine) }
+        if ($createResult.ExitCode -ne 0) {
+            if ($createResult.Output) {
+                Write-Host ($createResult.Output -join [Environment]::NewLine)
+            }
             throw 'Failed to create Dev Tunnel.'
         }
-        $created = ConvertFrom-DevtunnelJsonOutput $createOutput
+        $created = ConvertFrom-DevtunnelJsonOutput $createResult.Output
         $selectedTunnel = Normalize-TunnelId (Get-CreatedTunnelId $created)
     }
     $selectedTunnel = Normalize-TunnelId $selectedTunnel
     Assert-TunnelId $selectedTunnel
 
-    $portDocument = & devtunnel port list $selectedTunnel --json |
-        ConvertFrom-Json
+    $portListResult = Invoke-DevtunnelWithLoginRetry @('port', 'list', $selectedTunnel, '--json')
+    if ($portListResult.ExitCode -ne 0) {
+        if ($portListResult.Output) {
+            Write-Host ($portListResult.Output -join [Environment]::NewLine)
+        }
+        throw "Failed to list ports for Dev Tunnel $selectedTunnel."
+    }
+    $portDocument = ConvertFrom-DevtunnelJsonOutput $portListResult.Output
     $published = @(
         $portDocument.ports | ForEach-Object { [int]$_.portNumber }
     )
@@ -366,11 +399,16 @@ function Ensure-LinkTunnel([int[]]$Ports) {
                 $AgentChatPort { 'cloudpc-tunnel Web Chat' }
                 default { 'cloudpc-tunnel TCP channel' }
             }
-            & devtunnel port create $selectedTunnel `
-                --port-number $port `
-                --protocol auto `
-                --description $description | Out-Null
-            if ($LASTEXITCODE -ne 0) {
+            $createPortResult = Invoke-DevtunnelWithLoginRetry @(
+                'port', 'create', $selectedTunnel,
+                '--port-number', "$port",
+                '--protocol', 'auto',
+                '--description', $description
+            )
+            if ($createPortResult.ExitCode -ne 0) {
+                if ($createPortResult.Output) {
+                    Write-Host ($createPortResult.Output -join [Environment]::NewLine)
+                }
                 throw "Failed to publish tunnel port $port."
             }
         }
