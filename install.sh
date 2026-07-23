@@ -235,6 +235,15 @@ profile = {
 }
 json.dump(profile, open(profile_file, "w", encoding="utf-8"), indent=2)
 PY
+python3 - "$profile_file" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+if not isinstance(data, dict) or not data.get("Name") or not data.get("TunnelId"):
+    raise SystemExit(f"invalid profile written: {path}")
+if not isinstance(data.get("Channels"), list):
+    raise SystemExit(f"profile has no channel list: {path}")
+PY
 printf '%s\n' "$name" >"$ACTIVE_FILE"
 cp "$SCRIPT_DIR/src/cpctunnel.sh" "$BIN_DIR/cpctunnel"
 chmod +x "$BIN_DIR/cpctunnel"

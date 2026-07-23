@@ -242,7 +242,10 @@ case "$cmd" in
     file="$(profile_file "$profile")"
     start_connector "$profile"
     python3 -c 'import json,sys
-data=json.load(open(sys.argv[1], encoding="utf-8"))
+path=sys.argv[1]
+data=json.load(open(path, encoding="utf-8"))
+if not isinstance(data, dict):
+    raise SystemExit(f"invalid profile file: {path}. Remove ~/.cloudpc-tunnel and rerun install.sh.")
 print("Profile:", data["Name"])
 print("TunnelId:", data["TunnelId"])
 for ch in data.get("Channels", []):
