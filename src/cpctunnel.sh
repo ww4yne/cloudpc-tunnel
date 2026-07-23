@@ -100,9 +100,9 @@ err_log() {
 
 is_running() {
   profile="$1"
-  file="$(pid_file "$1")"
-  [ -f "$file" ] || return 1
-  pid="$(cat "$file")"
+  pid_path="$(pid_file "$1")"
+  [ -f "$pid_path" ] || return 1
+  pid="$(cat "$pid_path")"
   [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 1
   profile_json="$(profile_file "$profile")"
   tunnel_id="$(json_value "$profile_json" TunnelId 2>/dev/null || true)"
@@ -110,7 +110,7 @@ is_running() {
   case "$command_line" in
     *devtunnel*connect*"$tunnel_id"*) return 0 ;;
   esac
-  rm -f "$file"
+  rm -f "$pid_path"
   return 1
 }
 
@@ -125,8 +125,8 @@ stop_connector() {
 start_connector() {
   profile="$1"
   require devtunnel
-  file="$(profile_file "$profile")"
-  tunnel_id="$(json_value "$file" TunnelId)"
+  connector_profile_json="$(profile_file "$profile")"
+  tunnel_id="$(json_value "$connector_profile_json" TunnelId)"
   mkdir -p "$(state_dir "$profile")"
   if is_running "$profile"; then
     return
@@ -181,11 +181,11 @@ ssh_channel() {
   profile="$1"
   channel="$2"
   remote="$3"
-  file="$(profile_file "$profile")"
   port="$(ensure_channel_port "$profile" "$channel")"
-  user="$(channel_value "$file" "$channel" User)"
-  alias="$(channel_value "$file" "$channel" HostKeyAlias)"
-  identity="$(channel_value "$file" "$channel" IdentityFile || true)"
+  ssh_profile_json="$(profile_file "$profile")"
+  user="$(channel_value "$ssh_profile_json" "$channel" User)"
+  alias="$(channel_value "$ssh_profile_json" "$channel" HostKeyAlias)"
+  identity="$(channel_value "$ssh_profile_json" "$channel" IdentityFile || true)"
   [ -n "$user" ] || { echo "Channel has no SSH user: $channel" >&2; exit 1; }
   known_hosts="$(state_dir "$profile")/known_hosts"
   args="-tt -p $port -l $user -o HostKeyAlias=$alias -o CheckHostIP=no -o UserKnownHostsFile=$known_hosts -o StrictHostKeyChecking=ask -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
@@ -239,8 +239,8 @@ case "$cmd" in
     ;;
   status)
     profile="$(profile_or_default "${1:-}")"
-    file="$(profile_file "$profile")"
     start_connector "$profile"
+    status_profile_json="$(profile_file "$profile")"
     python3 -c 'import json,sys
 path=sys.argv[1]
 data=json.load(open(path, encoding="utf-8"))
@@ -249,7 +249,7 @@ if not isinstance(data, dict):
 print("Profile:", data["Name"])
 print("TunnelId:", data["TunnelId"])
 for ch in data.get("Channels", []):
-    print(f"{ch.get('Name')} {ch.get('Kind')} host:{ch.get('HostPort')}")' "$file"
+    print(f"{ch.get('Name')} {ch.get('Kind')} host:{ch.get('HostPort')}")' "$status_profile_json"
     ;;
   pwsh)
     profile="$(profile_or_default "${1:-}")"
