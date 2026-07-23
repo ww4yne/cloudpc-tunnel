@@ -12,6 +12,7 @@ windows_user=""
 linux_user=""
 agent_port="8787"
 tcp_channels=""
+devtunnel_login="microsoft"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -20,10 +21,11 @@ while [ "$#" -gt 0 ]; do
     --windows-ssh-user) windows_user="$2"; shift 2 ;;
     --linux-ssh-user) linux_user="$2"; shift 2 ;;
     --agent-chat-port) agent_port="$2"; shift 2 ;;
+    --devtunnel-login) devtunnel_login="$2"; shift 2 ;;
     --tcp-channel) tcp_channels="${tcp_channels}${tcp_channels:+
 }$2"; shift 2 ;;
     -h|--help)
-      echo "Usage: sh ./install.sh [--name NAME] [--tunnel-id ID] [--windows-ssh-user USER] [--linux-ssh-user USER] [--agent-chat-port PORT] [--tcp-channel name=port[:kind]]"
+      echo "Usage: sh ./install.sh [--name NAME] [--tunnel-id ID] [--windows-ssh-user USER] [--linux-ssh-user USER] [--agent-chat-port PORT] [--devtunnel-login github|microsoft|github-device-code|microsoft-device-code] [--tcp-channel name=port[:kind]]"
       exit 0
       ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
@@ -106,7 +108,13 @@ ensure_devtunnel_login() {
   fi
 
   echo "Dev Tunnels login is required. Complete the browser login flow."
-  devtunnel user login
+  case "$devtunnel_login" in
+    github) devtunnel user login -g ;;
+    microsoft) devtunnel user login ;;
+    github-device-code) devtunnel user login -g -d ;;
+    microsoft-device-code) devtunnel user login -d ;;
+    *) echo "Unknown devtunnel login provider: $devtunnel_login" >&2; exit 1 ;;
+  esac
 }
 
 echo "cloudpc-tunnel client setup"
@@ -211,15 +219,16 @@ fi
 
 mkdir -p "$PROFILES_DIR" "$BIN_DIR"
 profile_file="$PROFILES_DIR/$name.json"
-python3 - "$profile_file" "$channels_file" "$name" "$tunnel_id" "$windows_user" "$linux_user" "$agent_port" <<'PY'
+python3 - "$profile_file" "$channels_file" "$name" "$tunnel_id" "$windows_user" "$linux_user" "$agent_port" "$devtunnel_login" <<'PY'
 import json, sys
-profile_file, channels_file, name, tunnel_id, windows_user, linux_user, agent_port = sys.argv[1:]
+profile_file, channels_file, name, tunnel_id, windows_user, linux_user, agent_port, devtunnel_login = sys.argv[1:]
 channels = json.load(open(channels_file, encoding="utf-8"))
 profile = {
     "SchemaVersion": 2,
     "Name": name,
     "TunnelId": tunnel_id,
     "CommandName": "cpctunnel",
+    "DevTunnelLoginProvider": devtunnel_login,
     "HostKeyAliasPrefix": "cpctunnel",
     "Transports": ["devtunnel"],
     "WindowsSshUser": windows_user,

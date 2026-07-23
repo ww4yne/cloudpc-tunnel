@@ -22,6 +22,8 @@ param(
     [string[]]$Transport = @('devtunnel'),
     [string[]]$TcpChannel = @(),
     [string]$AgentWorkingDirectory = '~',
+    [ValidateSet('github', 'microsoft', 'github-device-code', 'microsoft-device-code')]
+    [string]$DevTunnelLoginProvider = 'microsoft',
     [switch]$SkipPackageInstall
 )
 
@@ -129,6 +131,18 @@ function Invoke-InstallWizard {
 
     if (-not $script:Status) {
         $script:CommandName = Read-Text 'CLI command name' $CommandName
+        $loginChoice = Read-Menu 'Dev Tunnels login provider' @(
+            'Microsoft / Entra account (recommended for Windows 365)',
+            'GitHub account',
+            'GitHub account with device code',
+            'Microsoft / Entra account with device code'
+        ) 1
+        $script:DevTunnelLoginProvider = switch ($loginChoice) {
+            1 { 'microsoft' }
+            2 { 'github' }
+            3 { 'github-device-code' }
+            4 { 'microsoft-device-code' }
+        }
     }
     $script:TunnelId = Read-Text 'Existing Dev Tunnel ID with cluster suffix, or blank to create/use one' $TunnelId
 
@@ -280,8 +294,18 @@ function Ensure-DevtunnelLogin {
         $login = $null
     }
     if (-not $login -or $login.status -ne 'Logged in') {
-        & devtunnel user login
+        & devtunnel user login @(Get-DevtunnelLoginArguments)
         if ($LASTEXITCODE -ne 0) { throw 'Dev Tunnel login failed.' }
+    }
+}
+
+function Get-DevtunnelLoginArguments {
+    switch ($DevTunnelLoginProvider) {
+        'github' { @('-g') }
+        'microsoft' { @() }
+        'github-device-code' { @('-g', '-d') }
+        'microsoft-device-code' { @('-d') }
+        default { @() }
     }
 }
 
@@ -331,7 +355,7 @@ function Invoke-DevtunnelWithLoginRetry([string[]]$Arguments) {
         Write-Host 'Dev Tunnels login expired. Refreshing login...' `
             -ForegroundColor Yellow
         & devtunnel user logout *> $null
-        & devtunnel user login
+        & devtunnel user login @(Get-DevtunnelLoginArguments)
         if ($LASTEXITCODE -ne 0) { throw 'Dev Tunnel login failed.' }
         $result = Invoke-RawDevtunnel $Arguments
         $output = $result.Output
@@ -474,6 +498,10 @@ function New-ClientInstallCommand(
     $args.Add((Quote-InstallArgument $ProfileName))
     $args.Add('-CommandName')
     $args.Add((Quote-InstallArgument $CommandName))
+    if ($DevTunnelLoginProvider -ne 'microsoft') {
+        $args.Add('-DevTunnelLoginProvider')
+        $args.Add((Quote-InstallArgument $DevTunnelLoginProvider))
+    }
     $args.Add('-TunnelId')
     $args.Add((Quote-InstallArgument $SelectedTunnel))
 
@@ -528,6 +556,8 @@ function New-PosixClientInstallCommand(
     $args.Add((Quote-InstallArgument $ProfileName))
     $args.Add('--tunnel-id')
     $args.Add((Quote-InstallArgument $SelectedTunnel))
+    $args.Add('--devtunnel-login')
+    $args.Add((Quote-InstallArgument $DevTunnelLoginProvider))
     if (-not $WebOnly -and $WindowsSshPort -gt 0 -and $SelectedWindowsUser) {
         $args.Add('--windows-ssh-user')
         $args.Add((Quote-InstallArgument $SelectedWindowsUser))
@@ -576,6 +606,7 @@ function Save-HostConfig(
         Name = $ProfileName
         TunnelId = $SelectedTunnel
         CommandName = $CommandName
+        DevTunnelLoginProvider = $DevTunnelLoginProvider
         WebOnly = [bool]$WebOnly
         Transport = @($Transport)
         Distro = $Distro
@@ -627,6 +658,9 @@ function Import-HostConfigForStatus {
     }
     if ($scriptBoundParameterNames -notcontains 'Name' -and $hostConfig.Name) {
         $script:Name = [string]$hostConfig.Name
+    }
+    if ($scriptBoundParameterNames -notcontains 'DevTunnelLoginProvider' -and $hostConfig.DevTunnelLoginProvider) {
+        $script:DevTunnelLoginProvider = [string]$hostConfig.DevTunnelLoginProvider
     }
 }
 
@@ -1189,6 +1223,7 @@ if ($Status) {
         -WindowsSshUser $WindowsSshUser `
         -LinuxSshUser $LinuxSshUser `
         -TcpChannel $TcpChannel `
+        -DevTunnelLoginProvider $DevTunnelLoginProvider `
         -WebOnly:$WebOnly
 }
 elseif ($Server) {
