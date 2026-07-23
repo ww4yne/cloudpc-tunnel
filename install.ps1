@@ -99,6 +99,7 @@ function Invoke-InstallWizard {
     $script:Status = $choice -eq 3
 
     if ($script:Server -or $script:Client) {
+        $script:PromptCustomTcp = $false
         $transportChoice = Read-Menu 'Which private transport should be configured?' @(
             'Microsoft Dev Tunnels private access (recommended)',
             'SSH jump host (planned, not implemented in this preview)'
@@ -119,6 +120,7 @@ function Invoke-InstallWizard {
             $script:LinuxSshPort = 0
         }
         elseif ($mode -eq 4) {
+            $script:PromptCustomTcp = $true
             $enableWindows = Read-YesNo 'Enable Windows OpenSSH channel?' $true
             $enableWsl = Read-YesNo 'Enable WSL OpenSSH channel?' $false
             $enableWeb = Read-YesNo 'Enable Web Chat channel?' $true
@@ -186,14 +188,16 @@ function Invoke-InstallWizard {
         $script:AgentWorkingDirectory = Read-Text 'Default agent working directory' $AgentWorkingDirectory
     }
 
-    $channels = [Collections.Generic.List[string]]::new()
-    while (Read-YesNo 'Add another custom TCP channel?' $false) {
-        $channelName = Read-Text 'Channel name, for example websocket or api'
-        $channelPort = Read-Text 'Cloud PC host port'
-        $channelKind = Read-Text 'Channel kind label' 'tcp'
-        $channels.Add("${channelName}=${channelPort}:$channelKind")
+    if ($script:PromptCustomTcp) {
+        $channels = [Collections.Generic.List[string]]::new()
+        while (Read-YesNo 'Add another custom TCP channel?' $false) {
+            $channelName = Read-Text 'Channel name, for example websocket or api'
+            $channelPort = Read-Text 'Cloud PC host port'
+            $channelKind = Read-Text 'Channel kind label' 'tcp'
+            $channels.Add("${channelName}=${channelPort}:$channelKind")
+        }
+        $script:TcpChannel = $channels.ToArray()
     }
-    $script:TcpChannel = $channels.ToArray()
 }
 
 $selectedActions = @($Server, $Client, $Status) | Where-Object { $_ }
@@ -339,22 +343,28 @@ function Invoke-DevtunnelWithLoginRetry([string[]]$Arguments) {
     }
 
     function Invoke-RawDevtunnel([string[]]$RawArguments) {
-        $psi = [Diagnostics.ProcessStartInfo]::new()
-        $psi.FileName = 'devtunnel'
-        $psi.Arguments = Join-ProcessArguments $RawArguments
-        $psi.RedirectStandardOutput = $true
-        $psi.RedirectStandardError = $true
-        $psi.UseShellExecute = $false
-        $process = [Diagnostics.Process]::Start($psi)
-        $stdout = $process.StandardOutput.ReadToEnd()
-        $stderr = $process.StandardError.ReadToEnd()
-        $process.WaitForExit()
-        [pscustomobject]@{
-            ExitCode = $process.ExitCode
-            Output = @(
-                if ($stdout) { $stdout -split "`r?`n" | Where-Object { $_ } }
-                if ($stderr) { $stderr -split "`r?`n" | Where-Object { $_ } }
-            )
+        # Redirect to temp files to avoid the classic sequential ReadToEnd()
+        # pipe-buffer deadlock that can hang devtunnel commands.
+        $outFile = [IO.Path]::GetTempFileName()
+        $errFile = [IO.Path]::GetTempFileName()
+        try {
+            $process = Start-Process -FilePath 'devtunnel' `
+                -ArgumentList (Join-ProcessArguments $RawArguments) `
+                -NoNewWindow -Wait -PassThru `
+                -RedirectStandardOutput $outFile `
+                -RedirectStandardError $errFile
+            $stdout = Get-Content $outFile -Raw -ErrorAction SilentlyContinue
+            $stderr = Get-Content $errFile -Raw -ErrorAction SilentlyContinue
+            [pscustomobject]@{
+                ExitCode = $process.ExitCode
+                Output = @(
+                    if ($stdout) { $stdout -split "`r?`n" | Where-Object { $_ } }
+                    if ($stderr) { $stderr -split "`r?`n" | Where-Object { $_ } }
+                )
+            }
+        }
+        finally {
+            Remove-Item $outFile, $errFile -Force -ErrorAction SilentlyContinue
         }
     }
 
