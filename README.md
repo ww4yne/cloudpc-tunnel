@@ -142,7 +142,7 @@ These are intentionally not required:
 Clone or download this repository on both the Cloud PC and the client device:
 
 ```powershell
-git clone https://github.com/<owner>/cloudpc-tunnel.git
+git clone https://github.com/ww4yne/cloudpc-tunnel.git
 Set-Location .\cloudpc-tunnel
 ```
 
