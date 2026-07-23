@@ -320,6 +320,14 @@ function Ensure-DevtunnelLogin {
         Remove-Item $outFile, $errFile -Force -ErrorAction SilentlyContinue
     }
 
+    if ($loggedIn -and -not (Test-DevtunnelLoginProvider $text)) {
+        Write-Host (
+            "Current Dev Tunnels login does not match requested provider " +
+            "'$DevTunnelLoginProvider'. Switching login..."
+        ) -ForegroundColor Yellow
+        $loggedIn = $false
+    }
+
     if (-not $loggedIn) {
         Write-Host 'Signing in to Dev Tunnels...' -ForegroundColor Yellow
         # Clear any stale/expired cached token first so login returns a fresh one.
@@ -337,6 +345,16 @@ function Get-DevtunnelLoginArguments {
         'microsoft-device-code' { @('-d') }
         default { @() }
     }
+}
+
+function Test-DevtunnelLoginProvider([string]$UserShowOutput) {
+    $wantGitHub = $DevTunnelLoginProvider -in @('github', 'github-device-code')
+    $hasGitHub = $UserShowOutput -match '(?i)\busing\s+GitHub\b|GitHub'
+    $hasMicrosoft = $UserShowOutput -match '(?i)\busing\s+Microsoft\b|Microsoft|Entra'
+
+    if ($wantGitHub) { return $hasGitHub }
+    if ($hasGitHub -and -not $hasMicrosoft) { return $false }
+    return $true
 }
 
 function Get-DevtunnelDeviceLoginArguments {

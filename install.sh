@@ -94,11 +94,26 @@ ensure_devtunnel() {
 
 ensure_devtunnel_login() {
   user_output="$(devtunnel user show 2>&1 || true)"
+  provider_ok=0
+  case "$devtunnel_login" in
+    github|github-device-code)
+      printf '%s\n' "$user_output" | grep -Eiq 'using GitHub|GitHub' && provider_ok=1
+      ;;
+    microsoft|microsoft-device-code)
+      if printf '%s\n' "$user_output" | grep -Eiq 'using Microsoft|Microsoft|Entra'; then
+        provider_ok=1
+      fi
+      ;;
+  esac
   case "$user_output" in
     *"login required"*|*"Login required"*|*"not logged"*|*"Not logged"*|*"not authenticated"*|*"Not authenticated"*) ;;
     *)
       if printf '%s\n' "$user_output" | grep -Eiq 'logged in|user|username|account|entra|github|microsoft'; then
-        return
+        if [ "$provider_ok" = "1" ]; then
+          return
+        fi
+        echo "Current Dev Tunnels login does not match requested provider '$devtunnel_login'. Switching login."
+        devtunnel user logout >/dev/null 2>&1 || true
       fi
       ;;
   esac
