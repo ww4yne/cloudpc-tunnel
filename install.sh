@@ -91,7 +91,17 @@ ensure_devtunnel() {
 }
 
 ensure_devtunnel_login() {
-  if devtunnel user show >/dev/null 2>&1; then
+  user_output="$(devtunnel user show 2>&1 || true)"
+  case "$user_output" in
+    *"login required"*|*"Login required"*|*"not logged"*|*"Not logged"*|*"not authenticated"*|*"Not authenticated"*) ;;
+    *)
+      if printf '%s\n' "$user_output" | grep -Eiq 'logged in|user|username|account|entra|github|microsoft'; then
+        return
+      fi
+      ;;
+  esac
+
+  if devtunnel user show --json >/dev/null 2>&1; then
     return
   fi
 

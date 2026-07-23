@@ -138,6 +138,10 @@ start_connector() {
   i=0
   while [ "$i" -lt 120 ]; do
     grep -Eq 'Forwarding from[[:space:]]+127\.0\.0\.1:[0-9]+' "$(out_log "$profile")" "$(err_log "$profile")" 2>/dev/null && return
+    if grep -Eiq 'login required|not logged|not authenticated' "$(out_log "$profile")" "$(err_log "$profile")" 2>/dev/null; then
+      echo "Dev Tunnels login is required. Run: devtunnel user login" >&2
+      exit 1
+    fi
     sleep 0.5
     i=$((i + 1))
   done
