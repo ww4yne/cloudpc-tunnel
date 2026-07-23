@@ -332,9 +332,13 @@ function Ensure-DevtunnelLogin {
         Write-Host 'Signing in to Dev Tunnels...' -ForegroundColor Yellow
         # Clear any stale/expired cached token first so login returns a fresh one.
         & devtunnel user logout *> $null
-        & devtunnel user login @(Get-DevtunnelLoginArguments)
-        if ($LASTEXITCODE -ne 0) { throw 'Dev Tunnel login failed.' }
+        Invoke-DevtunnelLogin (Get-DevtunnelLoginArguments) 'Dev Tunnel login failed.'
     }
+}
+
+function Invoke-DevtunnelLogin([string[]]$LoginArguments, [string]$FailureMessage) {
+    & devtunnel user login @LoginArguments | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw $FailureMessage }
 }
 
 function Get-DevtunnelLoginArguments {
@@ -419,8 +423,7 @@ function Invoke-DevtunnelWithLoginRetry([string[]]$Arguments) {
         Write-Host 'Dev Tunnels login expired. Refreshing login...' `
             -ForegroundColor Yellow
         & devtunnel user logout *> $null
-        & devtunnel user login @(Get-DevtunnelLoginArguments)
-        if ($LASTEXITCODE -ne 0) { throw 'Dev Tunnel login failed.' }
+        Invoke-DevtunnelLogin (Get-DevtunnelLoginArguments) 'Dev Tunnel login failed.'
         $result = Invoke-RawDevtunnel $Arguments
         $output = $result.Output
         $exitCode = $result.ExitCode
@@ -430,10 +433,8 @@ function Invoke-DevtunnelWithLoginRetry([string[]]$Arguments) {
                 'Trying device-code login...'
             ) -ForegroundColor Yellow
             & devtunnel user logout *> $null
-            & devtunnel user login @(Get-DevtunnelDeviceLoginArguments)
-            if ($LASTEXITCODE -ne 0) {
-                throw 'Dev Tunnel device-code login failed.'
-            }
+            Invoke-DevtunnelLogin (Get-DevtunnelDeviceLoginArguments) `
+                'Dev Tunnel device-code login failed.'
             $result = Invoke-RawDevtunnel $Arguments
             $output = $result.Output
             $exitCode = $result.ExitCode
@@ -1226,7 +1227,8 @@ function Install-Host {
     if ($selectedPorts.Count -eq 0) {
         throw 'Select at least one channel port to publish.'
     }
-    $selectedTunnel = Ensure-LinkTunnel $selectedPorts
+    $selectedTunnel = Normalize-TunnelId @(Ensure-LinkTunnel $selectedPorts)
+    Assert-TunnelId $selectedTunnel
 
     if ($WebOnly) {
         if ($AgentChatPort -gt 0) { Ensure-CopilotLogin }
