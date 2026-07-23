@@ -291,15 +291,40 @@ function Test-DevtunnelAuthError([object[]]$Output) {
 }
 
 function Invoke-DevtunnelWithLoginRetry([string[]]$Arguments) {
-    $output = @(& devtunnel @Arguments 2>&1)
-    $exitCode = $LASTEXITCODE
+    function Invoke-RawDevtunnel([string[]]$RawArguments) {
+        $psi = [Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName = 'devtunnel'
+        foreach ($argument in $RawArguments) {
+            $psi.ArgumentList.Add($argument)
+        }
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.UseShellExecute = $false
+        $process = [Diagnostics.Process]::Start($psi)
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        [pscustomobject]@{
+            ExitCode = $process.ExitCode
+            Output = @(
+                if ($stdout) { $stdout -split "`r?`n" | Where-Object { $_ } }
+                if ($stderr) { $stderr -split "`r?`n" | Where-Object { $_ } }
+            )
+        }
+    }
+
+    $result = Invoke-RawDevtunnel $Arguments
+    $output = $result.Output
+    $exitCode = $result.ExitCode
     if ($exitCode -ne 0 -and (Test-DevtunnelAuthError $output)) {
-        Write-Host 'Dev Tunnels login expired. Please complete the login flow.' `
+        Write-Host 'Dev Tunnels login expired. Refreshing login...' `
             -ForegroundColor Yellow
+        & devtunnel user logout *> $null
         & devtunnel user login
         if ($LASTEXITCODE -ne 0) { throw 'Dev Tunnel login failed.' }
-        $output = @(& devtunnel @Arguments 2>&1)
-        $exitCode = $LASTEXITCODE
+        $result = Invoke-RawDevtunnel $Arguments
+        $output = $result.Output
+        $exitCode = $result.ExitCode
     }
     [pscustomobject]@{
         ExitCode = $exitCode
