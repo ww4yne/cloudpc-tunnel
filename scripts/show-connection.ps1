@@ -2,11 +2,36 @@
 param(
     [string]$TunnelId,
     [string]$Distro = 'Ubuntu',
+    [int]$WindowsSshPort = 22,
+    [int]$LinuxSshPort = 2222,
     [int]$AgentChatPort = 8787,
+    [string]$WindowsSshUser = '',
+    [string]$LinuxSshUser = '',
+    [string[]]$TcpChannel = @(),
     [switch]$WebOnly
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Get-ExtraTcpPorts {
+    @(
+        foreach ($entry in $TcpChannel) {
+            if ($entry -notmatch '^([A-Za-z0-9_.-]+)[:=](\d{1,5})(?::([A-Za-z0-9_.-]+))?$') {
+                throw "TcpChannel must use name=port or name:port[:kind], got: $entry"
+            }
+            [int]$Matches[2]
+        }
+    )
+}
+
+function Get-RequiredPorts {
+    $ports = @()
+    if (-not $WebOnly -and $WindowsSshPort -gt 0) { $ports += $WindowsSshPort }
+    if (-not $WebOnly -and $LinuxSshPort -gt 0) { $ports += $LinuxSshPort }
+    if ($AgentChatPort -gt 0) { $ports += $AgentChatPort }
+    $ports += @(Get-ExtraTcpPorts)
+    @($ports | Where-Object { $_ -gt 0 } | Select-Object -Unique)
+}
 
 function Get-TunnelSummary([string]$Id) {
     $ports = @()
@@ -20,17 +45,16 @@ function Get-TunnelSummary([string]$Id) {
         $show = & devtunnel show $Id --json 2>$null | ConvertFrom-Json
         $hostConnections = [int]$show.tunnel.hostConnections
     } catch {}
+    $requiredPorts = @(Get-RequiredPorts)
+    $missing = @($requiredPorts | Where-Object { $_ -notin $ports })
     [pscustomobject]@{
         TunnelId = $Id
         Ports = $ports
         PublishedPorts = $ports -join ', '
         HostConnections = $hostConnections
-        CloudPcAgentReady = if ($WebOnly) {
-            $AgentChatPort -in $ports
-        }
-        else {
-            (2222 -in $ports) -and ($AgentChatPort -in $ports)
-        }
+        RequiredPorts = $requiredPorts -join ', '
+        MissingPorts = $missing -join ', '
+        CloudPcTunnelReady = ($missing.Count -eq 0)
     }
 }
 
@@ -43,27 +67,17 @@ function Get-WindowsSshUser {
 }
 
 if (-not $TunnelId) {
-    $serverDir = Join-Path $HOME '.devbox-cli\server'
-    $webTunnelFile = Join-Path $HOME '.cloudpc-agent\server\web-tunnel-id'
-    $ids = if ($WebOnly -and (Test-Path $webTunnelFile)) {
-        @((Get-Content $webTunnelFile -Raw).Trim())
-    }
-    else {
-        @(
-            Get-ChildItem $serverDir -Directory -ErrorAction SilentlyContinue |
-                Where-Object { Test-Path (Join-Path $_.FullName 'host.log') } |
-                ForEach-Object Name
-        )
-    }
+    $tunnelFile = Join-Path $HOME '.cloudpc-tunnel\server\tunnel-id'
+    $ids = if (Test-Path $tunnelFile) { @((Get-Content $tunnelFile -Raw).Trim()) } else { @() }
     if ($ids.Count -eq 0) {
-        throw "No configured Server tunnel was found under $serverDir"
+        throw "No configured cloudpc-tunnel host tunnel was found under $tunnelFile"
     }
     if ($ids.Count -gt 1) {
         $summaries = @($ids | ForEach-Object { Get-TunnelSummary $_ })
-        $ready = @($summaries | Where-Object CloudPcAgentReady)
+        $ready = @($summaries | Where-Object CloudPcTunnelReady)
         if ($ready.Count -eq 1) {
             $TunnelId = $ready[0].TunnelId
-            Write-Host "Selected cloudpc-agent tunnel: $TunnelId" `
+            Write-Host "Selected cloudpc-tunnel tunnel: $TunnelId" `
                 -ForegroundColor Green
         }
         else {
@@ -79,7 +93,7 @@ if (-not $TunnelId) {
                     -ForegroundColor Yellow
                 Write-Host (
                     'WSL SSH and Agent Chat ports are not published yet; ' +
-                    'CloudPcAgentReady remains False.'
+                    'CloudPcTunnelReady remains False.'
                 ) -ForegroundColor Yellow
             }
             else {
@@ -87,9 +101,9 @@ if (-not $TunnelId) {
                     -ForegroundColor Yellow
                 $summaries |
                     Select-Object TunnelId, PublishedPorts, HostConnections,
-                        CloudPcAgentReady |
+                        CloudPcTunnelReady |
                     Format-Table -AutoSize
-                Write-Host 'No unique active or cloudpc-agent-ready tunnel exists.' `
+                Write-Host 'No unique active or cloudpc-tunnel-ready tunnel exists.' `
                     -ForegroundColor Yellow
                 Write-Host 'Wait for -Server to finish, or query one explicitly:'
                 foreach ($id in $ids) {
@@ -104,9 +118,18 @@ if (-not $TunnelId) {
     }
 }
 
-$windowsUser = if ($WebOnly) { '' } else { Get-WindowsSshUser }
+$windowsUser = if ($WindowsSshUser) {
+    $WindowsSshUser
+} elseif (-not $WebOnly -and $WindowsSshPort -gt 0) {
+    Get-WindowsSshUser
+} else {
+    ''
+}
 $linuxUser = ''
-if (-not $WebOnly) {
+if ($LinuxSshUser) {
+    $linuxUser = $LinuxSshUser
+}
+elseif (-not $WebOnly -and $LinuxSshPort -gt 0) {
     $linuxUser = (& wsl.exe -d $Distro -- whoami 2>$null).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $linuxUser) {
         throw "Could not read the default user from WSL distro '$Distro'."
@@ -130,22 +153,57 @@ $ports = $tunnelSummary.Ports
     LinuxSshUser = $linuxUser
     Distro = $Distro
     PublishedPorts = $ports -join ', '
+    RequiredPorts = $tunnelSummary.RequiredPorts
+    MissingPorts = $tunnelSummary.MissingPorts
     HostConnections = $tunnelSummary.HostConnections
-    CloudPcAgentReady = $tunnelSummary.CloudPcAgentReady
-    AgentChatUrl = $agentUrl
+    CloudPcTunnelReady = $tunnelSummary.CloudPcTunnelReady
+    AgentChatUrl = if ($AgentChatPort -gt 0) { $agentUrl } else { '' }
 } | Format-List
 
 Write-Host 'Client install command:' -ForegroundColor Cyan
 $profileName = $env:COMPUTERNAME.ToLowerInvariant()
 if ($WebOnly) {
-    Write-Host (
-        ".\install.ps1 -Client -WebOnly -Name '$profileName' " +
-        "-TunnelId '$TunnelId'"
+    $parts = @(
+        '.\install.ps1',
+        '-Client',
+        '-WebOnly',
+        '-Name', "'$profileName'",
+        '-CommandName', 'cpctunnel',
+        '-TunnelId', "'$TunnelId'"
     )
+    if ($AgentChatPort -ne 8787) {
+        $parts += @('-AgentChatPort', "$AgentChatPort")
+    }
+    if ($TcpChannel.Count -gt 0) {
+        $parts += @('-TcpChannel', (@($TcpChannel | ForEach-Object { "'$_'" }) -join ','))
+    }
+    Write-Host ($parts -join ' ')
 }
 else {
-    Write-Host (
-        ".\install.ps1 -Client -Name '$profileName' -TunnelId '$TunnelId' " +
-        "-WindowsSshUser '$windowsUser' -LinuxSshUser '$linuxUser'"
+    $parts = @(
+        '.\install.ps1',
+        '-Client',
+        '-Name', "'$profileName'",
+        '-CommandName', 'cpctunnel',
+        '-TunnelId', "'$TunnelId'"
     )
+    if ($WindowsSshPort -gt 0 -and $windowsUser) {
+        $parts += @('-WindowsSshUser', "'$windowsUser'")
+    }
+    if ($WindowsSshPort -ne 22) {
+        $parts += @('-WindowsSshPort', "$WindowsSshPort")
+    }
+    if ($LinuxSshPort -gt 0 -and $linuxUser) {
+        $parts += @('-LinuxSshUser', "'$linuxUser'")
+    }
+    if ($LinuxSshPort -ne 2222) {
+        $parts += @('-LinuxSshPort', "$LinuxSshPort")
+    }
+    if ($AgentChatPort -ne 8787) {
+        $parts += @('-AgentChatPort', "$AgentChatPort")
+    }
+    if ($TcpChannel.Count -gt 0) {
+        $parts += @('-TcpChannel', (@($TcpChannel | ForEach-Object { "'$_'" }) -join ','))
+    }
+    Write-Host ($parts -join ' ')
 }

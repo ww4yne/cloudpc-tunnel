@@ -1,3 +1,4 @@
-.cloudpc-agent/
+.cloudpc-tunnel/
+artifacts/
 node_modules/
 *.log

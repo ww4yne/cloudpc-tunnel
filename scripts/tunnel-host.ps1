@@ -5,7 +5,7 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
-$stateDir = Join-Path $HOME ".cloudpc-agent\server\$TunnelId"
+$stateDir = Join-Path $HOME ".cloudpc-tunnel\server\$TunnelId"
 $logFile = Join-Path $stateDir 'tunnel-host.log'
 New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
 

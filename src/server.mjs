@@ -341,7 +341,7 @@ const server = createServer(async (req, res) => {
     const parts = url.pathname.split('/').filter(Boolean);
 
     if (req.method === 'GET' && url.pathname === '/api/health') {
-      json(res, 200, { ok: true, name: 'cloudpc-agent', sessions: sessions.size });
+      json(res, 200, { ok: true, name: 'cloudpc-tunnel', sessions: sessions.size });
       return;
     }
 
@@ -482,7 +482,7 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`cloudpc-agent listening on http://${host}:${port}`);
+  console.log(`cloudpc-tunnel listening on http://${host}:${port}`);
   console.log(`cwd=${defaultCwd}`);
   console.log(`copilot=${copilot}`);
 });

@@ -25,13 +25,7 @@ function Invoke-WslRoot([string]$Script) {
 
 Write-Host 'Checking host prerequisites...' -ForegroundColor Cyan
 if (-not (Get-Command devtunnel -ErrorAction SilentlyContinue)) {
-    throw 'devtunnel CLI is required. Install it with devbox-cli first.'
-}
-if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    throw 'Node.js 20+ is required for Agent Chat.'
-}
-if (-not (Get-Command copilot -ErrorAction SilentlyContinue)) {
-    throw 'GitHub Copilot CLI is required for Agent Chat.'
+    throw 'devtunnel CLI is required for Microsoft Dev Tunnels transport.'
 }
 
 $distros = @(& wsl.exe -l -q) | ForEach-Object { $_.Trim([char]0).Trim() } |
@@ -51,7 +45,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y openssh-server tmux
 mkdir -p /run/sshd /etc/ssh/sshd_config.d
-cat >/etc/ssh/sshd_config.d/cloudpc-agent.conf <<'EOF'
+cat >/etc/ssh/sshd_config.d/cloudpc-tunnel.conf <<'EOF'
 Port $WslSshPort
 ListenAddress 0.0.0.0
 PermitRootLogin no
@@ -76,15 +70,15 @@ linux_home="`$(getent passwd 1000 | cut -d: -f6)"
 if [ -n "`$linux_user" ] && [ -d "`$linux_home" ]; then
   touch "`$linux_home/.tmux.conf"
   if ! grep -q 'cloudpc-clear-da-input' "`$linux_home/.tmux.conf"; then
-    printf '\n# cloudpc-agent: clear delayed terminal DA replies at shell prompt\n' >>"`$linux_home/.tmux.conf"
+    printf '\n# cloudpc-tunnel: clear delayed terminal DA replies at shell prompt\n' >>"`$linux_home/.tmux.conf"
     printf "set-hook -g client-attached 'run-shell -b /usr/local/bin/cloudpc-clear-da-input'\n" >>"`$linux_home/.tmux.conf"
   fi
   chown "`$linux_user:`$linux_user" "`$linux_home/.tmux.conf"
   touch "`$linux_home/.inputrc"
-  if ! grep -q 'cloudpc-agent: ignore Windows Terminal DA replies' "`$linux_home/.inputrc"; then
+  if ! grep -q 'cloudpc-tunnel: ignore Windows Terminal DA replies' "`$linux_home/.inputrc"; then
     cat >>"`$linux_home/.inputrc" <<'EOF'
 
-# cloudpc-agent: ignore Windows Terminal DA replies
+# cloudpc-tunnel: ignore Windows Terminal DA replies
 "\e[?61;4;6;7;14;21;22;23;24;28;32;42;52c": ""
 "\e[>0;10;1c": ""
 EOF
@@ -103,21 +97,5 @@ if (-not (Test-NetConnection 127.0.0.1 -Port $WslSshPort `
     )
 }
 
-Write-Host 'Publishing WSL SSH and Agent Chat ports...' -ForegroundColor Cyan
-$portDocument = & devtunnel port list $TunnelId --json 2>$null | ConvertFrom-Json
-$existing = @($portDocument.ports | ForEach-Object { [int]$_.portNumber })
-foreach ($port in @($WslSshPort, $AgentChatPort)) {
-    if ($port -notin $existing) {
-        & devtunnel port create $TunnelId --port-number $port --protocol auto `
-            --description $(if ($port -eq $WslSshPort) { 'WSL OpenSSH' } else { 'Cloud PC Agent Chat' })
-        if ($LASTEXITCODE -ne 0) { throw "Failed to publish port $port" }
-    }
-}
-
 Write-Host ''
-Write-Host 'Host setup complete.' -ForegroundColor Green
-Write-Host "Start Agent Chat:"
-Write-Host "  Set-Location '$projectRoot'"
-Write-Host "  node .\src\server.mjs"
-Write-Host ''
-Write-Host 'Restart the existing Dev Tunnel host if the new ports are not picked up.'
+Write-Host 'WSL SSH setup complete.' -ForegroundColor Green

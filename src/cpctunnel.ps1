@@ -3,20 +3,21 @@ param(
     [Parameter(Position = 0)]
     [ValidateSet(
         'pwsh', 'bash', 'agent', 'status', 'reconnect', 'disconnect',
-        'list', 'use'
+        'logs', 'port', 'open', 'list', 'use'
     )]
     [string]$Action = 'pwsh',
     [Parameter(Position = 1)]
+    [string]$Target,
+    [Parameter(Position = 2)]
     [string]$Profile,
     [string]$Session
 )
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
-$configDir = Join-Path $HOME '.cloudpc-agent'
+$configDir = Join-Path $HOME '.cloudpc-tunnel'
 $profilesDir = Join-Path $configDir 'profiles'
 $activeFile = Join-Path $configDir 'active-profile'
-$legacyConfig = Join-Path $configDir 'config.json'
 
 function Get-ProfileNames {
     if (-not (Test-Path $profilesDir)) { return @() }
@@ -48,11 +49,14 @@ if ($Action -eq 'list') {
                 TunnelId = $item.TunnelId
                 WindowsUser = $item.WindowsSshUser
                 LinuxUser = $item.LinuxSshUser
+                Channels = if ($item.Channels) {
+                    (@($item.Channels) | ForEach-Object { "$($_.Name):$($_.HostPort)" }) -join ', '
+                } else { '' }
             }
         }
     )
     if (-not $rows) {
-        Write-Host 'No Cloud PC profiles are configured.'
+        Write-Host 'No cloudpc-tunnel profiles are configured.'
     }
     else {
         $rows | Format-Table -AutoSize
@@ -61,18 +65,22 @@ if ($Action -eq 'list') {
 }
 
 if ($Action -eq 'use') {
-    if (-not $Profile) { throw 'Usage: cloudpc use <profile>' }
-    if ($Profile -notmatch '^[A-Za-z0-9_.-]+$') {
+    if (-not $Target) { throw 'Usage: cpctunnel use <profile>' }
+    if ($Target -notmatch '^[A-Za-z0-9_.-]+$') {
         throw 'Invalid profile name.'
     }
-    $target = Join-Path $profilesDir "$Profile.json"
-    if (-not (Test-Path $target)) {
-        throw "Profile not found: $Profile. Run 'cloudpc list'."
+    $targetFile = Join-Path $profilesDir "$Target.json"
+    if (-not (Test-Path $targetFile)) {
+        throw "Profile not found: $Target. Run 'cpctunnel list'."
     }
     New-Item -ItemType Directory -Path $configDir -Force | Out-Null
-    Set-Content $activeFile $Profile -Encoding ASCII
-    Write-Host "Active Cloud PC: $Profile" -ForegroundColor Green
+    Set-Content $activeFile $Target -Encoding ASCII
+    Write-Host "Active cloudpc-tunnel profile: $Target" -ForegroundColor Green
     return
+}
+
+if ($Action -notin @('port', 'open') -and $Target -and -not $Profile) {
+    $Profile = $Target
 }
 
 $profileName = $Profile
@@ -86,18 +94,15 @@ $configFile = if ($profileName) {
     Join-Path $profilesDir "$profileName.json"
 }
 else {
-    $legacyConfig
+    ''
 }
 if (-not (Test-Path $configFile)) {
     throw (
-        "No active Cloud PC profile. Run 'cloudpc list' or install a Client " +
+        "No active cloudpc-tunnel profile. Run 'cpctunnel list' or install a Client " +
         'profile with install.ps1 -Client -Name <name>.'
     )
 }
 $config = Get-Content $configFile -Raw | ConvertFrom-Json
-if (-not $profileName) {
-    $profileName = if ($config.Name) { $config.Name } else { 'legacy' }
-}
 $stateDir = Join-Path $configDir "state\$profileName"
 $processFile = Join-Path $stateDir 'connector.json'
 $outLog = Join-Path $stateDir 'connector.out.log'
@@ -137,11 +142,7 @@ function Ensure-ActiveTunnel {
         throw 'Dev Tunnel returned an invalid tunnel list.'
     }
 
-    $requiredPorts = @(
-        [int]$config.WindowsSshPort,
-        [int]$config.LinuxSshPort,
-        [int]$config.AgentChatPort
-    ) | Where-Object { $_ -gt 0 } | Select-Object -Unique
+    $requiredPorts = @(Get-ChannelPorts)
     $replacements = @(
         foreach ($candidate in @($catalog.tunnels)) {
             if ([int]$candidate.hostConnections -lt 1) { continue }
@@ -180,7 +181,7 @@ function Ensure-ActiveTunnel {
     }
 
     Write-Host (
-        "Cloud PC '$profileName' has no active host. Choose a target:"
+        "Profile '$profileName' has no active Dev Tunnel host. Choose a target:"
     ) -ForegroundColor Yellow
     Write-Host "  1. Keep $profileName - $currentId (offline)"
     for ($i = 0; $i -lt $replacements.Count; $i++) {
@@ -212,7 +213,7 @@ function Ensure-ActiveTunnel {
     } while (-not $valid)
 
     if ($selection -eq 1) {
-        Write-Host "Keeping Cloud PC profile '$profileName'." `
+        Write-Host "Keeping cloudpc-tunnel profile '$profileName'." `
             -ForegroundColor Yellow
         return
     }
@@ -221,11 +222,12 @@ function Ensure-ActiveTunnel {
     if ($selected.ProfileNames.Count -gt 0) {
         $targetProfile = [string]$selected.ProfileNames[0]
         Set-Content $activeFile $targetProfile -Encoding ASCII
-        Write-Host "Active Cloud PC: $targetProfile" -ForegroundColor Green
+        Write-Host "Active cloudpc-tunnel profile: $targetProfile" -ForegroundColor Green
         $invokeArgs = @{
             Action = $Action
             Profile = $targetProfile
         }
+        if ($Target) { $invokeArgs.Target = $Target }
         if ($Session) { $invokeArgs.Session = $Session }
         & $PSCommandPath @invokeArgs
         exit $LASTEXITCODE
@@ -235,7 +237,7 @@ function Ensure-ActiveTunnel {
     Stop-Connector -TunnelIds @($currentId, $replacement)
     $config.TunnelId = $replacement
     $config | ConvertTo-Json | Set-Content $configFile -Encoding UTF8
-    Write-Host "Cloud PC tunnel changed: $currentId -> $replacement" `
+    Write-Host "cloudpc-tunnel tunnel changed: $currentId -> $replacement" `
         -ForegroundColor Yellow
 }
 
@@ -311,6 +313,26 @@ function Test-Port([int]$Port) {
         return $result.AsyncWaitHandle.WaitOne(500) -and $client.Connected
     } catch { return $false }
     finally { $client.Dispose() }
+}
+
+function Get-Channel([string]$Name) {
+    $channels = @($config.Channels)
+    if (-not $channels) { throw "Profile '$profileName' has no TCP channels." }
+    $channel = @($channels | Where-Object Name -eq $Name | Select-Object -First 1)
+    if (-not $channel) {
+        $available = ($channels | ForEach-Object Name) -join ', '
+        throw "Channel not found: $Name. Available channels: $available"
+    }
+    return $channel[0]
+}
+
+function Get-ChannelPorts {
+    @(
+        @($config.Channels) |
+            ForEach-Object { [int]$_.HostPort } |
+            Where-Object { $_ -gt 0 } |
+            Select-Object -Unique
+    )
 }
 
 function Stop-Connector(
@@ -409,7 +431,7 @@ function Start-Connector([int[]]$RequiredHostPorts) {
     }
     Get-Content $outLog, $errLog -Tail 60 -ErrorAction SilentlyContinue
     throw (
-        'Cloud PC connector did not expose required host port(s): ' +
+        'cloudpc-tunnel connector did not expose required host port(s): ' +
         ($RequiredHostPorts -join ', ')
     )
 }
@@ -418,7 +440,8 @@ function Invoke-Ssh(
     [int]$Port,
     [string]$User,
     [string]$HostAlias,
-    [string]$RemoteCommand
+    [string]$RemoteCommand,
+    [string]$IdentityFile = ''
 ) {
     $knownHosts = Join-Path $stateDir 'known_hosts'
     $args = @(
@@ -430,13 +453,19 @@ function Invoke-Ssh(
         '-o', "UserKnownHostsFile=$knownHosts",
         '-o', 'StrictHostKeyChecking=ask',
         '-o', 'ServerAliveInterval=15',
-        '-o', 'ServerAliveCountMax=3',
-        '-o', 'PubkeyAuthentication=no',
-        '-o', 'PreferredAuthentications=password,keyboard-interactive',
-        '-o', 'NumberOfPasswordPrompts=3',
-        '127.0.0.1',
-        $RemoteCommand
+        '-o', 'ServerAliveCountMax=3'
     )
+    if ($IdentityFile) {
+        $args += @('-i', $IdentityFile, '-o', 'IdentitiesOnly=yes')
+    }
+    else {
+        $args += @(
+            '-o', 'PubkeyAuthentication=no',
+            '-o', 'PreferredAuthentications=password,keyboard-interactive',
+            '-o', 'NumberOfPasswordPrompts=3'
+        )
+    }
+    $args += @('127.0.0.1', $RemoteCommand)
     & ssh @args
     exit $LASTEXITCODE
 }
@@ -466,12 +495,12 @@ function Get-AgentUrl {
 }
 
 function Set-AgentWindowBounds {
-    if (-not ('CloudPcAgent.NativeWindow' -as [type])) {
+    if (-not ('CloudPcTunnel.NativeWindow' -as [type])) {
         Add-Type @'
 using System;
 using System.Runtime.InteropServices;
 
-namespace CloudPcAgent {
+namespace CloudPcTunnel {
     public static class NativeWindow {
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool SetWindowPos(
@@ -493,12 +522,12 @@ namespace CloudPcAgent {
         $window = Get-Process msedge -ErrorAction SilentlyContinue |
             Where-Object {
                 $_.MainWindowHandle -ne 0 -and
-                $_.MainWindowTitle -like '*Windows 365 Agent*'
+                $_.MainWindowTitle -like '*Windows 365 Cloud PC*'
             } |
             Sort-Object StartTime -Descending |
             Select-Object -First 1
         if ($window) {
-            [CloudPcAgent.NativeWindow]::SetWindowPos(
+            [CloudPcTunnel.NativeWindow]::SetWindowPos(
                 $window.MainWindowHandle,
                 [IntPtr]::Zero,
                 60,
@@ -515,14 +544,14 @@ namespace CloudPcAgent {
 
 switch ($Action) {
     'pwsh' {
-        if (-not $config.WindowsSshUser -or
-            [int]$config.WindowsSshPort -le 0) {
-            throw 'This profile is Web Chat-only and has no PowerShell channel.'
+        $channel = Get-Channel 'windows-ssh'
+        if (-not $channel.User -or [int]$channel.HostPort -le 0) {
+            throw 'This profile has no Windows PowerShell SSH channel.'
         }
         Ensure-ActiveTunnel
-        Start-Connector @([int]$config.WindowsSshPort)
-        $port = Get-ForwardedPort ([int]$config.WindowsSshPort)
-        $sessionName = if ($Session) { $Session } else { $config.WindowsSession }
+        Start-Connector @([int]$channel.HostPort)
+        $port = Get-ForwardedPort ([int]$channel.HostPort)
+        $sessionName = if ($Session) { $Session } else { $channel.Session }
         if ($sessionName -notmatch '^[A-Za-z0-9_.-]+$') {
             throw 'Session may contain only letters, digits, dot, underscore, and hyphen.'
         }
@@ -532,26 +561,30 @@ switch ($Action) {
             '{ ''pwsh.exe'' } else { ''powershell.exe'' }; psmux new-session -A -s ' +
             $sessionName + ' -- $shell"'
         )
-        Invoke-Ssh $port $config.WindowsSshUser `
-            "cloudpc-$profileName-windows" $remote
+        Invoke-Ssh $port $channel.User $channel.HostKeyAlias $remote `
+            $channel.IdentityFile
     }
     'bash' {
-        if (-not $config.LinuxSshUser -or
-            [int]$config.LinuxSshPort -le 0) {
-            throw 'This profile is Web Chat-only and has no Bash channel.'
+        $channel = Get-Channel 'wsl-ssh'
+        if (-not $channel.User -or [int]$channel.HostPort -le 0) {
+            throw 'This profile has no WSL Bash SSH channel.'
         }
         Ensure-ActiveTunnel
-        Start-Connector @([int]$config.LinuxSshPort)
-        $port = Get-ForwardedPort ([int]$config.LinuxSshPort)
-        $sessionName = if ($Session) { $Session } else { $config.LinuxSession }
+        Start-Connector @([int]$channel.HostPort)
+        $port = Get-ForwardedPort ([int]$channel.HostPort)
+        $sessionName = if ($Session) { $Session } else { $channel.Session }
         if ($sessionName -notmatch '^[A-Za-z0-9_.-]+$') {
             throw 'Session may contain only letters, digits, dot, underscore, and hyphen.'
         }
-        Invoke-Ssh $port $config.LinuxSshUser `
-            "cloudpc-$profileName-linux" `
-            "tmux source-file ~/.tmux.conf 2>/dev/null || true; exec env TERM=xterm-256color tmux -u new-session -A -s '$sessionName'"
+        Invoke-Ssh $port $channel.User $channel.HostKeyAlias `
+            "tmux source-file ~/.tmux.conf 2>/dev/null || true; exec env TERM=xterm-256color tmux -u new-session -A -s '$sessionName'" `
+            $channel.IdentityFile
     }
     'agent' {
+        $channel = Get-Channel 'web-chat'
+        if ([int]$channel.HostPort -le 0 -or [int]$config.AgentChatPort -le 0) {
+            throw 'This profile has no Web Chat channel.'
+        }
         Ensure-ActiveTunnel
         $url = Get-AgentUrl
         if ($IsWindows -or $env:OS -eq 'Windows_NT') {
@@ -575,29 +608,69 @@ switch ($Action) {
     'status' {
         Ensure-ActiveTunnel
         $process = Get-ConnectorProcess
-        $windowsPort = Get-ForwardedPort ([int]$config.WindowsSshPort)
-        $linuxPort = Get-ForwardedPort ([int]$config.LinuxSshPort)
+        $rows = @(
+            foreach ($channel in @($config.Channels)) {
+                $localPort = Get-ForwardedPort ([int]$channel.HostPort)
+                [pscustomobject]@{
+                    Profile = $profileName
+                    Channel = $channel.Name
+                    Kind = $channel.Kind
+                    HostPort = [int]$channel.HostPort
+                    LocalPort = if ($process -and (Test-Port $localPort)) { $localPort } else { 0 }
+                    Ready = [bool]($process -and (Test-Port $localPort))
+                }
+            }
+        )
         [pscustomobject]@{
             Profile = $profileName
             TunnelId = $config.TunnelId
             ProcessId = if ($process) { $process.Id } else { $null }
-            WindowsSsh = if ($process -and (Test-Port $windowsPort)) {
-                $windowsPort
-            } else { 0 }
-            LinuxSsh = if ($process -and (Test-Port $linuxPort)) {
-                $linuxPort
-            } else { 0 }
-            AgentChat = Get-AgentUrl
         }
+        $rows | Format-Table -AutoSize
     }
     'reconnect' {
         Ensure-ActiveTunnel
         Stop-Connector
-        $ports = @(
-            [int]$config.WindowsSshPort,
-            [int]$config.LinuxSshPort
-        ) | Where-Object { $_ -gt 0 }
+        $ports = @(Get-ChannelPorts)
         if ($ports.Count -gt 0) { Start-Connector $ports }
     }
     'disconnect' { Stop-Connector }
+    'logs' {
+        Get-Content $outLog, $errLog -Tail 100 -Wait `
+            -ErrorAction SilentlyContinue
+    }
+    'port' {
+        if (-not $Target) { throw 'Usage: cpctunnel port <channel> [profile]' }
+        $channel = Get-Channel $Target
+        Ensure-ActiveTunnel
+        Start-Connector @([int]$channel.HostPort)
+        $port = Get-ForwardedPort ([int]$channel.HostPort)
+        if (-not (Test-Port $port)) {
+            throw "Local forwarded port for channel '$($channel.Name)' is not reachable."
+        }
+        [pscustomobject]@{
+            Profile = $profileName
+            Channel = $channel.Name
+            Kind = $channel.Kind
+            HostPort = [int]$channel.HostPort
+            LocalPort = $port
+            LocalEndpoint = "127.0.0.1:$port"
+        }
+    }
+    'open' {
+        if (-not $Target) { throw 'Usage: cpctunnel open <channel> [profile]' }
+        $channel = Get-Channel $Target
+        Ensure-ActiveTunnel
+        Start-Connector @([int]$channel.HostPort)
+        $port = Get-ForwardedPort ([int]$channel.HostPort)
+        if (-not (Test-Port $port)) {
+            throw "Local forwarded port for channel '$($channel.Name)' is not reachable."
+        }
+        if ($channel.Kind -in @('http', 'web', 'websocket', 'api')) {
+            Start-Process "http://127.0.0.1:$port"
+        }
+        else {
+            Write-Host "127.0.0.1:$port"
+        }
+    }
 }

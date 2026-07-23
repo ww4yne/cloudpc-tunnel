@@ -10,6 +10,17 @@ param(
     [string]$Distro = 'Ubuntu',
     [string]$WindowsSshUser,
     [string]$LinuxSshUser,
+    [string]$CommandName = 'cpctunnel',
+    [string]$WindowsSession = 'cpctunnel',
+    [string]$LinuxSession = 'cpctunnel',
+    [int]$WindowsSshPort = 22,
+    [int]$LinuxSshPort = 2222,
+    [int]$AgentChatPort = 8787,
+    [string]$WindowsIdentityFile = '',
+    [string]$LinuxIdentityFile = '',
+    [ValidateSet('devtunnel', 'ssh-jump')]
+    [string[]]$Transport = @('devtunnel'),
+    [string[]]$TcpChannel = @(),
     [string]$AgentWorkingDirectory = '',
     [switch]$SkipPackageInstall
 )
@@ -17,14 +28,150 @@ param(
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 $projectRoot = $PSScriptRoot
-
-$selectedActions = @($Server, $Client, $Status) | Where-Object { $_ }
-if (@($selectedActions).Count -ne 1) {
-    throw 'Specify exactly one action: -Server, -Client, or -Status.'
-}
+$stateRoot = Join-Path $HOME '.cloudpc-tunnel'
+$scriptBoundParameterNames = @($PSBoundParameters.Keys)
 
 function Write-Step([string]$Message) {
     Write-Host "`n==> $Message" -ForegroundColor Cyan
+}
+
+function Read-Text([string]$Prompt, [string]$Default = '') {
+    $suffix = if ($Default) { " [$Default]" } else { '' }
+    $value = Read-Host "$Prompt$suffix"
+    if (-not $value -and $Default) { return $Default }
+    return $value
+}
+
+function Read-YesNo([string]$Prompt, [bool]$Default = $false) {
+    $hint = if ($Default) { 'Y/n' } else { 'y/N' }
+    do {
+        $value = Read-Host "$Prompt [$hint]"
+        if (-not $value) { return $Default }
+        switch -Regex ($value) {
+            '^(y|yes)$' { return $true }
+            '^(n|no)$' { return $false }
+            default { Write-Warning 'Enter y or n.' }
+        }
+    } while ($true)
+}
+
+function Read-Menu([string]$Prompt, [string[]]$Choices, [int]$Default = 1) {
+    Write-Host ''
+    Write-Host $Prompt -ForegroundColor Cyan
+    for ($i = 0; $i -lt $Choices.Count; $i++) {
+        $marker = if (($i + 1) -eq $Default) { '*' } else { ' ' }
+        Write-Host ("  {0}{1}. {2}" -f $marker, ($i + 1), $Choices[$i])
+    }
+    do {
+        $answer = Read-Host "Select [1-$($Choices.Count), default $Default]"
+        if (-not $answer) { return $Default }
+        $selection = 0
+        if ([int]::TryParse($answer, [ref]$selection) -and
+            $selection -ge 1 -and $selection -le $Choices.Count) {
+            return $selection
+        }
+        Write-Warning 'Enter one of the listed numbers.'
+    } while ($true)
+}
+
+function Invoke-InstallWizard {
+    Write-Host ''
+    Write-Host 'cloudpc-tunnel setup' -ForegroundColor Green
+    Write-Host 'Build a private, reliable TCP link between this client and a Cloud PC.'
+
+    $choice = Read-Menu 'What do you want to configure?' @(
+        'Cloud PC host: configure this Windows 365 Cloud PC as the tunnel host',
+        'Client device: configure this device to connect to a Cloud PC',
+        'Status: inspect a Cloud PC tunnel'
+    ) 1
+    $script:Server = $choice -eq 1
+    $script:Client = $choice -eq 2
+    $script:Status = $choice -eq 3
+
+    if ($script:Server -or $script:Client) {
+        $transportChoice = Read-Menu 'Which private transport should be configured?' @(
+            'Microsoft Dev Tunnels private access (recommended)',
+            'SSH jump host (planned, not implemented in this preview)'
+        ) 1
+        $script:Transport = switch ($transportChoice) {
+            1 { @('devtunnel') }
+            2 { @('ssh-jump') }
+        }
+
+        $mode = Read-Menu 'Which application set should be enabled?' @(
+            'Recommended: Windows SSH, Web Chat, and optional custom TCP channels',
+            'Full: Windows SSH, WSL SSH, Web Chat, and optional custom TCP channels',
+            'Web-only: Web Chat plus optional custom TCP channels',
+            'Custom: choose each capability'
+        ) 1
+        $script:WebOnly = $mode -eq 3
+        if ($mode -eq 1) {
+            $script:LinuxSshPort = 0
+        }
+        elseif ($mode -eq 4) {
+            $enableWindows = Read-YesNo 'Enable Windows OpenSSH channel?' $true
+            $enableWsl = Read-YesNo 'Enable WSL OpenSSH channel?' $false
+            $enableWeb = Read-YesNo 'Enable Web Chat channel?' $true
+            if (-not $enableWindows) { $script:WindowsSshPort = 0 }
+            if (-not $enableWsl) { $script:LinuxSshPort = 0 }
+            if (-not $enableWeb) { $script:AgentChatPort = 0 }
+            $script:WebOnly = (-not $enableWindows) -and (-not $enableWsl) -and $enableWeb
+        }
+    }
+
+    if (-not $script:Status) {
+        $script:CommandName = Read-Text 'CLI command name' $CommandName
+    }
+    $script:TunnelId = Read-Text 'Existing Dev Tunnel ID with cluster suffix, or blank to create/use one' $TunnelId
+
+    if ($script:Client) {
+        $defaultName = if ($Name) { $Name } elseif ($TunnelId) { $TunnelId.Split('.')[0] } else { $env:COMPUTERNAME.ToLowerInvariant() }
+        $script:Name = Read-Text 'Client profile name' $defaultName
+    }
+
+    if (-not $script:WebOnly -and $script:WindowsSshPort -ne 0) {
+        $script:WindowsSshPort = [int](Read-Text 'Windows SSH host port' "$WindowsSshPort")
+        $script:WindowsSession = Read-Text 'Default Windows psmux session' $WindowsSession
+        if ($script:Client) {
+            $script:WindowsSshUser = Read-Text 'Windows SSH user, usually tenant UPN' $WindowsSshUser
+            $script:WindowsIdentityFile = Read-Text 'Windows SSH private key path, blank for password auth' $WindowsIdentityFile
+        }
+
+    }
+
+    if (-not $script:WebOnly -and $script:LinuxSshPort -ne 0) {
+        $script:LinuxSshPort = [int](Read-Text 'WSL SSH host port' "$LinuxSshPort")
+        $script:LinuxSession = Read-Text 'Default WSL tmux session' $LinuxSession
+        if ($script:Server) {
+            $script:Distro = Read-Text 'WSL distro name' $Distro
+        }
+        if ($script:Client) {
+            $script:LinuxSshUser = Read-Text 'WSL SSH user' $LinuxSshUser
+            $script:LinuxIdentityFile = Read-Text 'WSL SSH private key path, blank for password auth' $LinuxIdentityFile
+        }
+    }
+
+    $script:AgentChatPort = [int](Read-Text 'Web Chat host port, 0 to disable' "$AgentChatPort")
+    if ($script:Server -and $script:AgentChatPort -gt 0) {
+        $script:AgentWorkingDirectory = Read-Text 'Default agent working directory, blank for project root' $AgentWorkingDirectory
+    }
+
+    $channels = [Collections.Generic.List[string]]::new()
+    while (Read-YesNo 'Add another custom TCP channel?' $false) {
+        $channelName = Read-Text 'Channel name, for example websocket or api'
+        $channelPort = Read-Text 'Cloud PC host port'
+        $channelKind = Read-Text 'Channel kind label' 'tcp'
+        $channels.Add("${channelName}=${channelPort}:$channelKind")
+    }
+    $script:TcpChannel = $channels.ToArray()
+}
+
+$selectedActions = @($Server, $Client, $Status) | Where-Object { $_ }
+if (@($selectedActions).Count -eq 0) {
+    Invoke-InstallWizard
+}
+elseif (@($selectedActions).Count -gt 1) {
+    throw 'Specify only one action: -Server, -Client, or -Status.'
 }
 
 function Assert-Administrator {
@@ -64,190 +211,248 @@ function Install-WingetPackage([string]$Id, [string]$CommandName) {
     }
 }
 
-function Get-ConfiguredTunnelId {
-    if ($TunnelId) { return $TunnelId }
-    $webTunnelFile = Join-Path $HOME '.cloudpc-agent\server\web-tunnel-id'
-    if ($WebOnly -and (Test-Path $webTunnelFile)) {
-        $webTunnel = (Get-Content $webTunnelFile -Raw).Trim()
-        if ($webTunnel) { return $webTunnel }
+function Assert-TunnelId([string]$Value) {
+    if ($Value -and $Value -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]*[.][A-Za-z0-9-]+$') {
+        throw 'TunnelId must be the full canonical Dev Tunnel ID, including cluster suffix.'
     }
-    $serverDir = Join-Path $HOME '.devbox-cli\server'
-    if (-not (Test-Path $serverDir)) { return $null }
-    $ids = @(
-        Get-ChildItem $serverDir -Directory -ErrorAction SilentlyContinue |
-            Where-Object { Test-Path (Join-Path $_.FullName 'host.log') } |
-            ForEach-Object Name
+}
+
+function Assert-Port([int]$Port, [string]$Label) {
+    if ($Port -lt 0 -or $Port -gt 65535) {
+        throw "$Label must be between 0 and 65535."
+    }
+}
+
+function Get-ExtraTcpChannels {
+    @(
+        foreach ($entry in $TcpChannel) {
+            if ($entry -notmatch '^([A-Za-z0-9_.-]+)[:=](\d{1,5})(?::([A-Za-z0-9_.-]+))?$') {
+                throw "TcpChannel must use name=port or name:port[:kind], got: $entry"
+            }
+            [pscustomobject]@{
+                Name = $Matches[1]
+                Port = [int]$Matches[2]
+                Kind = if ($Matches[3]) { $Matches[3] } else { 'tcp' }
+            }
+        }
     )
-    if ($ids.Count -eq 1) { return $ids[0] }
-    if ($ids.Count -gt 1) {
-        $summaries = @(
-            foreach ($id in $ids) {
-                $ports = @()
-                $hostConnections = 0
-                try {
-                    $portDocument = & devtunnel port list $id --json 2>$null |
-                        ConvertFrom-Json
-                    $ports = @(
-                        $portDocument.ports |
-                            ForEach-Object { [int]$_.portNumber }
-                    )
-                } catch {}
-                try {
-                    $show = & devtunnel show $id --json 2>$null |
-                        ConvertFrom-Json
-                    $hostConnections = [int]$show.tunnel.hostConnections
-                } catch {}
-                [pscustomobject]@{
-                    TunnelId = $id
-                    Ports = $ports
-                    HostConnections = $hostConnections
-                    CloudPcAgentReady =
-                        (2222 -in $ports) -and (8787 -in $ports)
-                }
-            }
-        )
-
-        $ready = @($summaries | Where-Object CloudPcAgentReady)
-        if ($ready.Count -eq 1) {
-            Write-Host "Using cloudpc-agent tunnel: $($ready[0].TunnelId)"
-            return $ready[0].TunnelId
-        }
-
-        function Ensure-DevtunnelLogin {
-            Install-WingetPackage 'Microsoft.devtunnel' 'devtunnel'
-            try {
-                $login = & devtunnel user show --json 2>$null | ConvertFrom-Json
-            }
-            catch {
-                $login = $null
-            }
-            if (-not $login -or $login.status -ne 'Logged in') {
-                & devtunnel user login
-                if ($LASTEXITCODE -ne 0) { throw 'Dev Tunnel login failed.' }
-            }
-        }
-
-        function Ensure-WebTunnel {
-            Ensure-DevtunnelLogin
-            $selectedTunnel = Get-ConfiguredTunnelId
-            if ($selectedTunnel) {
-                $document = & devtunnel show $selectedTunnel --json 2>$null
-                if ($LASTEXITCODE -ne 0 -or -not $document) {
-                    throw "Configured Dev Tunnel was not found: $selectedTunnel"
-                }
-            }
-            else {
-                Write-Step 'Creating private Web Chat tunnel'
-                $created = & devtunnel create `
-                    --description 'Windows 365 Agent Web Chat' --json |
-                    ConvertFrom-Json
-                $selectedTunnel = [string]$created.tunnel.tunnelId
-                if (-not $selectedTunnel) {
-                    $selectedTunnel = [string]$created.tunnelId
-                }
-                if (-not $selectedTunnel) {
-                    throw 'Dev Tunnel was created but its ID was not returned.'
-                }
-            }
-
-            $ports = & devtunnel port list $selectedTunnel --json |
-                ConvertFrom-Json
-            $published = @($ports.ports | ForEach-Object { [int]$_.portNumber })
-            if (8787 -notin $published) {
-                & devtunnel port create $selectedTunnel `
-                    --port-number 8787 `
-                    --protocol auto `
-                    --description 'Cloud PC Agent Chat' | Out-Null
-                if ($LASTEXITCODE -ne 0) {
-                    throw 'Failed to publish the Web Chat tunnel port.'
-                }
-            }
-
-            $serverDir = Join-Path $HOME '.cloudpc-agent\server'
-            New-Item -ItemType Directory -Path $serverDir -Force | Out-Null
-            Set-Content (Join-Path $serverDir 'web-tunnel-id') `
-                $selectedTunnel -Encoding ASCII
-            return $selectedTunnel
-        }
-
-        $baseline = @(
-            $summaries |
-                Where-Object {
-                    (22 -in $_.Ports) -and $_.HostConnections -ge 1
-                }
-        )
-        if ($baseline.Count -eq 1) {
-            Write-Host "Using active Windows baseline tunnel: $($baseline[0].TunnelId)"
-            return $baseline[0].TunnelId
-        }
-
-        $summaries |
-            Select-Object TunnelId,
-                @{ n = 'PublishedPorts'; e = { $_.Ports -join ', ' } },
-                HostConnections, CloudPcAgentReady |
-            Format-Table -AutoSize
-        throw "Multiple ambiguous tunnels found. Rerun with -TunnelId: $($ids -join ', ')"
-    }
-    return $null
 }
 
-function Repair-DevboxCliSource([string]$Source) {
-    # Upstream ww4yne/devbox-cli install.ps1 has a known bug (as of the
-    # commit this was pinned against): Ensure-Tunnel's `devtunnel port
-    # create` call doesn't capture stdout, so its multi-line summary output
-    # leaks into the function's return stream alongside $canonicalId.
-    # PowerShell's array-to-string conversion then joins them into one
-    # polluted TunnelId, which breaks Register-ScheduledTask /
-    # Start-ScheduledTask downstream ("The parameter is incorrect"). Patch
-    # the fetched source in-memory until upstream carries the fix.
-    $buggy = @'
-        Write-Step 'Publishing the OpenSSH port'
-        & $Devtunnel port create $canonicalId `
-            --port-number 22 --protocol auto --description OpenSSH
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Failed to publish SSH port 22.'
-        }
-'@
-    $fixed = @'
-        Write-Step 'Publishing the OpenSSH port'
-        $portCreateOutput = @(
-            & $Devtunnel port create $canonicalId `
-                --port-number 22 --protocol auto --description OpenSSH 2>&1
-        )
-        if ($LASTEXITCODE -ne 0) {
-            if ($portCreateOutput) {
-                Write-Host ($portCreateOutput -join [Environment]::NewLine)
-            }
-            throw 'Failed to publish SSH port 22.'
-        }
-'@
-    if ($Source -match [regex]::Escape($buggy)) {
-        return $Source.Replace($buggy, $fixed)
+function Ensure-DevtunnelLogin {
+    if ('devtunnel' -notin $Transport) { return }
+    Install-WingetPackage 'Microsoft.devtunnel' 'devtunnel'
+    try {
+        $login = & devtunnel user show --json 2>$null | ConvertFrom-Json
     }
-    return $Source
+    catch {
+        $login = $null
+    }
+    if (-not $login -or $login.status -ne 'Logged in') {
+        & devtunnel user login
+        if ($LASTEXITCODE -ne 0) { throw 'Dev Tunnel login failed.' }
+    }
 }
 
-function Install-WindowsFoundation {
-    $configured = Get-ConfiguredTunnelId
-    if ($configured) { return $configured }
+function Get-CreatedTunnelId($Created) {
+    $selectedTunnel = [string]$Created.tunnel.tunnelId
+    if (-not $selectedTunnel) { $selectedTunnel = [string]$Created.tunnelId }
+    if (-not $selectedTunnel) {
+        throw 'Dev Tunnel was created but its ID was not returned.'
+    }
+    return $selectedTunnel
+}
 
-    Write-Step 'Installing secure Windows terminal foundation'
-    $source = Invoke-RestMethod `
-        'https://raw.githubusercontent.com/ww4yne/devbox-cli/main/install.ps1'
-    $source = Repair-DevboxCliSource $source
-    $installer = [scriptblock]::Create($source)
-    if ($TunnelId) {
-        & $installer -Mode Server -TunnelId $TunnelId
+function Ensure-LinkTunnel([int[]]$Ports) {
+    if ('ssh-jump' -in $Transport) {
+        throw 'SSH jump host transport is planned but not implemented in this preview. Select Microsoft Dev Tunnels for this version.'
+    }
+    if ('devtunnel' -notin $Transport) {
+        throw 'SSH jump host transport is planned but not implemented in this preview. Select Microsoft Dev Tunnels for this version.'
+    }
+    Ensure-DevtunnelLogin
+    Assert-TunnelId $TunnelId
+    $serverDir = Join-Path $stateRoot 'server'
+    $savedTunnelFile = Join-Path $serverDir 'tunnel-id'
+    $selectedTunnel = $TunnelId
+    if (-not $selectedTunnel -and (Test-Path $savedTunnelFile)) {
+        $savedTunnel = (Get-Content $savedTunnelFile -Raw).Trim()
+        if ($savedTunnel) {
+            Assert-TunnelId $savedTunnel
+            $selectedTunnel = $savedTunnel
+            Write-Host "Reusing saved cloudpc-tunnel tunnel: $selectedTunnel" `
+                -ForegroundColor Green
+        }
+    }
+    if ($selectedTunnel) {
+        $document = & devtunnel show $selectedTunnel --json 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $document) {
+            if ($TunnelId) {
+                throw "Configured Dev Tunnel was not found: $selectedTunnel"
+            }
+            throw (
+                "Saved cloudpc-tunnel Dev Tunnel was not found: $selectedTunnel. " +
+                "Pass -TunnelId to select a different tunnel or remove $savedTunnelFile."
+            )
+        }
     }
     else {
-        & $installer -Mode Server
+        Write-Step 'Creating private cloudpc-tunnel'
+        $created = & devtunnel create `
+            --description 'cloudpc-tunnel private TCP tunnel' --json |
+            ConvertFrom-Json
+        $selectedTunnel = Get-CreatedTunnelId $created
     }
 
-    $configured = Get-ConfiguredTunnelId
-    if (-not $configured) {
-        throw 'Windows foundation completed but the tunnel ID could not be discovered.'
+    $portDocument = & devtunnel port list $selectedTunnel --json |
+        ConvertFrom-Json
+    $published = @(
+        $portDocument.ports | ForEach-Object { [int]$_.portNumber }
+    )
+    foreach ($port in @($Ports | Where-Object { $_ -gt 0 } | Select-Object -Unique)) {
+        Assert-Port $port "Tunnel port $port"
+        if ($port -notin $published) {
+            $description = switch ($port) {
+                $WindowsSshPort { 'Windows OpenSSH' }
+                $LinuxSshPort { 'WSL OpenSSH' }
+                $AgentChatPort { 'cloudpc-tunnel Web Chat' }
+                default { 'cloudpc-tunnel TCP channel' }
+            }
+            & devtunnel port create $selectedTunnel `
+                --port-number $port `
+                --protocol auto `
+                --description $description | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to publish tunnel port $port."
+            }
+        }
     }
-    return $configured
+
+    New-Item -ItemType Directory -Path $serverDir -Force | Out-Null
+    Set-Content (Join-Path $serverDir 'tunnel-id') `
+        $selectedTunnel -Encoding ASCII
+    return $selectedTunnel
+}
+
+function Quote-InstallArgument([string]$Value) {
+    "'" + $Value.Replace("'", "''") + "'"
+}
+
+function New-ClientInstallCommand(
+    [string]$SelectedTunnel,
+    [string]$ProfileName,
+    [string]$SelectedWindowsUser,
+    [string]$SelectedLinuxUser
+) {
+    $args = [Collections.Generic.List[string]]::new()
+    $args.Add('.\install.ps1')
+    $args.Add('-Client')
+    if ($WebOnly) { $args.Add('-WebOnly') }
+    $args.Add('-Name')
+    $args.Add((Quote-InstallArgument $ProfileName))
+    $args.Add('-CommandName')
+    $args.Add((Quote-InstallArgument $CommandName))
+    $args.Add('-TunnelId')
+    $args.Add((Quote-InstallArgument $SelectedTunnel))
+
+    if (-not $WebOnly -and $WindowsSshPort -gt 0 -and $SelectedWindowsUser) {
+        $args.Add('-WindowsSshUser')
+        $args.Add((Quote-InstallArgument $SelectedWindowsUser))
+        if ($WindowsSession -ne 'cpctunnel') {
+            $args.Add('-WindowsSession')
+            $args.Add((Quote-InstallArgument $WindowsSession))
+        }
+    }
+    if ($WindowsSshPort -ne 22) {
+        $args.Add('-WindowsSshPort')
+        $args.Add("$WindowsSshPort")
+    }
+
+    if (-not $WebOnly -and $LinuxSshPort -gt 0 -and $SelectedLinuxUser) {
+        $args.Add('-LinuxSshUser')
+        $args.Add((Quote-InstallArgument $SelectedLinuxUser))
+        if ($LinuxSession -ne 'cpctunnel') {
+            $args.Add('-LinuxSession')
+            $args.Add((Quote-InstallArgument $LinuxSession))
+        }
+    }
+    if ($LinuxSshPort -ne 2222) {
+        $args.Add('-LinuxSshPort')
+        $args.Add("$LinuxSshPort")
+    }
+
+    if ($AgentChatPort -ne 8787) {
+        $args.Add('-AgentChatPort')
+        $args.Add("$AgentChatPort")
+    }
+
+    if ($TcpChannel.Count -gt 0) {
+        $args.Add('-TcpChannel')
+        $args.Add((@($TcpChannel | ForEach-Object { Quote-InstallArgument $_ }) -join ','))
+    }
+
+    return ($args -join ' ')
+}
+
+function Save-HostConfig(
+    [string]$SelectedTunnel,
+    [string]$SelectedWindowsUser,
+    [string]$SelectedLinuxUser
+) {
+    $serverDir = Join-Path $stateRoot 'server'
+    New-Item -ItemType Directory -Path $serverDir -Force | Out-Null
+    [ordered]@{
+        SchemaVersion = 1
+        TunnelId = $SelectedTunnel
+        CommandName = $CommandName
+        WebOnly = [bool]$WebOnly
+        Transport = @($Transport)
+        Distro = $Distro
+        WindowsSshPort = [int]$WindowsSshPort
+        LinuxSshPort = [int]$LinuxSshPort
+        AgentChatPort = [int]$AgentChatPort
+        WindowsSshUser = $SelectedWindowsUser
+        LinuxSshUser = $SelectedLinuxUser
+        WindowsSession = $WindowsSession
+        LinuxSession = $LinuxSession
+        TcpChannel = @($TcpChannel)
+    } | ConvertTo-Json -Depth 4 |
+        Set-Content (Join-Path $serverDir 'config.json') -Encoding UTF8
+}
+
+function Import-HostConfigForStatus {
+    $configFile = Join-Path $stateRoot 'server\config.json'
+    if (-not (Test-Path $configFile)) { return }
+    $hostConfig = Get-Content $configFile -Raw | ConvertFrom-Json
+
+    if ($scriptBoundParameterNames -notcontains 'TunnelId' -and
+        -not $TunnelId -and
+        $hostConfig.TunnelId) {
+        $script:TunnelId = [string]$hostConfig.TunnelId
+    }
+    if ($scriptBoundParameterNames -notcontains 'Distro' -and $hostConfig.Distro) {
+        $script:Distro = [string]$hostConfig.Distro
+    }
+    if ($scriptBoundParameterNames -notcontains 'WebOnly' -and $null -ne $hostConfig.WebOnly) {
+        $script:WebOnly = [bool]$hostConfig.WebOnly
+    }
+    if ($scriptBoundParameterNames -notcontains 'WindowsSshPort' -and $null -ne $hostConfig.WindowsSshPort) {
+        $script:WindowsSshPort = [int]$hostConfig.WindowsSshPort
+    }
+    if ($scriptBoundParameterNames -notcontains 'LinuxSshPort' -and $null -ne $hostConfig.LinuxSshPort) {
+        $script:LinuxSshPort = [int]$hostConfig.LinuxSshPort
+    }
+    if ($scriptBoundParameterNames -notcontains 'AgentChatPort' -and $null -ne $hostConfig.AgentChatPort) {
+        $script:AgentChatPort = [int]$hostConfig.AgentChatPort
+    }
+    if ($scriptBoundParameterNames -notcontains 'WindowsSshUser' -and $hostConfig.WindowsSshUser) {
+        $script:WindowsSshUser = [string]$hostConfig.WindowsSshUser
+    }
+    if ($scriptBoundParameterNames -notcontains 'LinuxSshUser' -and $hostConfig.LinuxSshUser) {
+        $script:LinuxSshUser = [string]$hostConfig.LinuxSshUser
+    }
+    if ($scriptBoundParameterNames -notcontains 'TcpChannel' -and $hostConfig.TcpChannel) {
+        $script:TcpChannel = @($hostConfig.TcpChannel | ForEach-Object { [string]$_ })
+    }
 }
 
 function Ensure-Wsl {
@@ -358,7 +563,7 @@ function Ensure-WindowsOpenSsh {
             # Minimal safe configuration. Bind loopback before the service ever
             # starts, so first-run initialization cannot expose TCP 22.
             Set-Content $configPath @'
-# cloudpc-agent: loopback-only SSH
+# cloudpc-tunnel: loopback-only SSH
 # Generated minimal OpenSSH Server configuration
 Port 22
 ListenAddress 127.0.0.1
@@ -389,7 +594,7 @@ Subsystem sftp sftp-server.exe
     $clean = @(
         $config |
             Where-Object {
-                $_ -ne '# cloudpc-agent: loopback-only SSH' -and
+                $_ -ne '# cloudpc-tunnel: loopback-only SSH' -and
                 $_ -notmatch '^\s*ListenAddress\s+(127\.0\.0\.1|::1)\s*$'
             }
     )
@@ -401,7 +606,7 @@ Subsystem sftp sftp-server.exe
         }
     }
     $loopbackBlock = @(
-        '# cloudpc-agent: loopback-only SSH',
+        '# cloudpc-tunnel: loopback-only SSH',
         'ListenAddress 127.0.0.1',
         'ListenAddress ::1',
         ''
@@ -515,7 +720,7 @@ function Register-AgentChatTask(
     [switch]$SkipWsl
 ) {
     Write-Step 'Registering Agent Chat background task'
-    $taskName = 'CloudPcAgentChat'
+    $taskName = 'CloudPcTunnelWeb'
     $existingTask = Get-ScheduledTask -TaskName $taskName `
         -ErrorAction SilentlyContinue
     if ($existingTask) {
@@ -552,10 +757,13 @@ function Register-AgentChatTask(
         '-Distro', "`"$SelectedDistro`""
     )
     if ($SkipWsl) { $arguments += '-SkipWsl' }
+    if ($AgentChatPort -gt 0) {
+        $arguments += @('-Port', "$AgentChatPort")
+    }
     if ($WorkingDirectory) {
         $arguments += @('-WorkingDirectory', "`"$WorkingDirectory`"")
     }
-    $serverDir = Join-Path $HOME '.cloudpc-agent\server'
+    $serverDir = Join-Path $stateRoot 'server'
     New-Item -ItemType Directory -Path $serverDir -Force | Out-Null
     $launcher = Join-Path $serverDir 'agent-chat-hidden.vbs'
     $hostCommand = ('"{0}" {1}' -f $pwsh, ($arguments -join ' '))
@@ -584,7 +792,7 @@ WScript.Quit exitCode
     do {
         Start-Sleep -Milliseconds 500
         try {
-            $health = Invoke-RestMethod 'http://127.0.0.1:8787/api/health' `
+            $health = Invoke-RestMethod "http://127.0.0.1:$AgentChatPort/api/health" `
                 -TimeoutSec 2
             if ($health.ok) { return }
         } catch {}
@@ -595,12 +803,6 @@ WScript.Quit exitCode
 
 function Restart-SelectedTunnelHost([string]$SelectedTunnel) {
     Write-Step 'Refreshing selected Dev Tunnel host'
-    $oldTaskName = "DevboxCliHost-$SelectedTunnel"
-    $oldTask = Get-ScheduledTask -TaskName $oldTaskName `
-        -ErrorAction SilentlyContinue
-    if ($oldTask) { $oldTask | Stop-ScheduledTask }
-    Start-Sleep -Seconds 1
-
     # Task Scheduler can leave the wrapper or its child alive. Match only this
     # tunnel's command lines, collect explicit PIDs, then stop those PIDs.
     $escaped = [regex]::Escape($SelectedTunnel)
@@ -624,14 +826,16 @@ function Restart-SelectedTunnelHost([string]$SelectedTunnel) {
         }
     }
 
-    if ($oldTask) {
-        Disable-ScheduledTask -TaskName $oldTaskName | Out-Null
-    }
-
     $safeId = $SelectedTunnel -replace '[^A-Za-z0-9_.-]', '_'
-    $taskName = "CloudPcAgentTunnelHost-$safeId"
+    $taskName = "CloudPcTunnelHost-$safeId"
+    $existingTask = Get-ScheduledTask -TaskName $taskName `
+        -ErrorAction SilentlyContinue
+    if ($existingTask) {
+        $existingTask | Stop-ScheduledTask
+        Start-Sleep -Seconds 1
+    }
     $hostScript = Join-Path $projectRoot 'scripts\tunnel-host.ps1'
-    $serverDir = Join-Path $HOME '.cloudpc-agent\server'
+    $serverDir = Join-Path $stateRoot 'server'
     New-Item -ItemType Directory -Path $serverDir -Force | Out-Null
     $launcher = Join-Path $serverDir "tunnel-host-$safeId.vbs"
     $pwsh = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
@@ -662,7 +866,7 @@ WScript.Quit exitCode
         -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
     Register-ScheduledTask -TaskName $taskName -Action $action `
         -Trigger $trigger -Principal $principal -Settings $settings `
-        -Description 'Hosts cloudpc-agent ports through Microsoft Dev Tunnels.' `
+        -Description 'Hosts cloudpc-tunnel ports through Microsoft Dev Tunnels.' `
         -Force | Out-Null
     Start-ScheduledTask -TaskName $taskName
 
@@ -680,77 +884,101 @@ WScript.Quit exitCode
 
 function Install-Host {
     Assert-Administrator
-    Install-WingetPackage 'OpenJS.NodeJS.LTS' 'node'
-    Install-WingetPackage 'GitHub.Copilot' 'copilot'
+    if (-not $WebOnly -and $WindowsSshPort -gt 0 -and $WindowsSshPort -ne 22) {
+        throw 'Windows OpenSSH channel currently requires WindowsSshPort 22.'
+    }
+    if ($AgentChatPort -gt 0) {
+        Install-WingetPackage 'OpenJS.NodeJS.LTS' 'node'
+        Install-WingetPackage 'GitHub.Copilot' 'copilot'
+    }
+    if (-not $WebOnly -and $WindowsSshPort -gt 0) {
+        Install-WingetPackage 'marlocarlo.psmux' 'psmux'
+    }
+
+    $extraPorts = @((Get-ExtraTcpChannels) | ForEach-Object Port)
+    $selectedPorts = @($extraPorts)
+    if (-not $WebOnly -and $WindowsSshPort -gt 0) { $selectedPorts += $WindowsSshPort }
+    if (-not $WebOnly -and $LinuxSshPort -gt 0) { $selectedPorts += $LinuxSshPort }
+    if ($AgentChatPort -gt 0) { $selectedPorts += $AgentChatPort }
+    if ($selectedPorts.Count -eq 0) {
+        throw 'Select at least one channel port to publish.'
+    }
+    $selectedTunnel = Ensure-LinkTunnel $selectedPorts
 
     if ($WebOnly) {
-        $selectedTunnel = Ensure-WebTunnel
-        Ensure-CopilotLogin
+        if ($AgentChatPort -gt 0) { Ensure-CopilotLogin }
         Restart-SelectedTunnelHost $selectedTunnel
-        Register-AgentChatTask -WorkingDirectory $AgentWorkingDirectory `
-            -SelectedDistro $Distro -SkipWsl
+        if ($AgentChatPort -gt 0) {
+            Register-AgentChatTask -WorkingDirectory $AgentWorkingDirectory `
+                -SelectedDistro $Distro -SkipWsl
+        }
 
-        Write-Host "`nWeb Chat host is ready." -ForegroundColor Green
+        Write-Host "`ncloudpc-tunnel host is ready." -ForegroundColor Green
         Write-Host "Tunnel ID : $selectedTunnel"
-        Write-Host 'Web Chat  : http://127.0.0.1:8787 (private tunnel)'
+        if ($AgentChatPort -gt 0) {
+            Write-Host "Web Chat  : http://127.0.0.1:$AgentChatPort (private tunnel)"
+        }
+        Save-HostConfig $selectedTunnel '' ''
         Write-Host ''
         Write-Host 'Run this from the client checkout:'
         $profileName = $env:COMPUTERNAME.ToLowerInvariant()
-        Write-Host (
-            ".\install.ps1 -Client -WebOnly -Name '$profileName' " +
-            "-TunnelId '$selectedTunnel'"
-        )
+        Write-Host (New-ClientInstallCommand $selectedTunnel $profileName '' '')
         return
     }
 
-    Ensure-Wsl
-    Ensure-WindowsOpenSsh
+    if ($WindowsSshPort -gt 0) { Ensure-WindowsOpenSsh }
+    if ($LinuxSshPort -gt 0) { Ensure-Wsl }
+    if ($AgentChatPort -gt 0) { Ensure-CopilotLogin }
 
-    $selectedTunnel = Install-WindowsFoundation
-    Ensure-CopilotLogin
-
-    Write-Step 'Configuring WSL runtime and private web channel'
-    & (Join-Path $projectRoot 'scripts\setup-host.ps1') `
-        -TunnelId $selectedTunnel -Distro $Distro
+    if ($LinuxSshPort -gt 0) {
+        Write-Step 'Configuring WSL runtime'
+        & (Join-Path $projectRoot 'scripts\setup-host.ps1') `
+            -TunnelId $selectedTunnel -Distro $Distro `
+            -WslSshPort $LinuxSshPort -AgentChatPort $AgentChatPort
+    }
 
     Restart-SelectedTunnelHost $selectedTunnel
 
-    Register-AgentChatTask -WorkingDirectory $AgentWorkingDirectory `
-        -SelectedDistro $Distro
+    if ($AgentChatPort -gt 0) {
+        Register-AgentChatTask -WorkingDirectory $AgentWorkingDirectory `
+            -SelectedDistro $Distro -SkipWsl:($LinuxSshPort -le 0)
+    }
 
     $linuxUser = $LinuxSshUser
-    if (-not $linuxUser) {
+    if (-not $linuxUser -and $LinuxSshPort -gt 0) {
         $linuxUser = (& wsl.exe -d $Distro -- whoami).Trim()
     }
     $windowsUser = $WindowsSshUser
     if (-not $windowsUser) {
         $windowsUser = Get-WindowsSshUser
     }
+    Save-HostConfig $selectedTunnel $windowsUser $linuxUser
 
-    Write-Host "`nCloud PC host is ready." -ForegroundColor Green
+    Write-Host "`ncloudpc-tunnel host is ready." -ForegroundColor Green
     Write-Host "Tunnel ID       : $selectedTunnel"
-    Write-Host "Windows SSH user: $windowsUser (corporate domain UPN)"
-    Write-Host "WSL SSH user    : $linuxUser"
-    Write-Host 'Agent Chat      : http://127.0.0.1:8787 (private tunnel port 8787)'
+    if ($WindowsSshPort -gt 0) { Write-Host "Windows SSH user: $windowsUser" }
+    if ($LinuxSshPort -gt 0) { Write-Host "WSL SSH user    : $linuxUser" }
+    if ($AgentChatPort -gt 0) { Write-Host "Web Chat        : http://127.0.0.1:$AgentChatPort (private tunnel)" }
+    if ($LinuxSshPort -gt 0) {
+        Write-Host ''
+        Write-Host 'If the WSL user has no SSH password, run:'
+        Write-Host "  wsl.exe -d $Distro -u root -- passwd $linuxUser"
+    }
     Write-Host ''
-    Write-Host 'If the WSL user has no SSH password, run:'
-    Write-Host "  wsl.exe -d $Distro -u root -- passwd $linuxUser"
-    Write-Host ''
-    Write-Host 'Run this from the cloudpc-agent checkout on the Windows client:'
+    Write-Host 'Run this from the cloudpc-tunnel checkout on the Windows client:'
     $profileName = $env:COMPUTERNAME.ToLowerInvariant()
-    Write-Host (
-        ".\install.ps1 -Client -Name '$profileName' " +
-        "-TunnelId '$selectedTunnel' " +
-        "-WindowsSshUser '$windowsUser' -LinuxSshUser '$linuxUser'"
-    )
+    Write-Host (New-ClientInstallCommand $selectedTunnel $profileName $windowsUser $linuxUser)
 }
 
 function Install-Client {
     if (-not $TunnelId) { throw '-TunnelId is required in Client mode.' }
-    if (-not $WebOnly -and -not $WindowsSshUser) {
+    if ('ssh-jump' -in $Transport -or 'devtunnel' -notin $Transport) {
+        throw 'SSH jump host transport is planned but not implemented in this preview. Select Microsoft Dev Tunnels for this version.'
+    }
+    if (-not $WebOnly -and $WindowsSshPort -gt 0 -and -not $WindowsSshUser) {
         throw '-WindowsSshUser is required unless -WebOnly is specified.'
     }
-    if (-not $WebOnly -and -not $LinuxSshUser) {
+    if (-not $WebOnly -and $LinuxSshPort -gt 0 -and -not $LinuxSshUser) {
         throw '-LinuxSshUser is required unless -WebOnly is specified.'
     }
 
@@ -761,20 +989,36 @@ function Install-Client {
         -TunnelId $TunnelId `
         -WindowsSshUser $WindowsSshUser `
         -LinuxSshUser $LinuxSshUser `
-        -WebOnly:$WebOnly
+        -WebOnly:$WebOnly `
+        -CommandName $CommandName `
+        -WindowsSession $WindowsSession `
+        -LinuxSession $LinuxSession `
+        -WindowsSshPort $WindowsSshPort `
+        -LinuxSshPort $LinuxSshPort `
+        -AgentChatPort $AgentChatPort `
+        -WindowsIdentityFile $WindowsIdentityFile `
+        -LinuxIdentityFile $LinuxIdentityFile `
+        -Transport $Transport `
+        -TcpChannel $TcpChannel
 
     Write-Host "`nClient is ready." -ForegroundColor Green
-    Write-Host '  cloudpc agent'
-    if (-not $WebOnly) {
-        Write-Host 'Windows SSH requires the corporate domain account password.'
-        Write-Host '  cloudpc pwsh'
-        Write-Host '  cloudpc bash'
-    }
+    if ($AgentChatPort -gt 0) { Write-Host "  $CommandName agent" }
+    if (-not $WebOnly -and $WindowsSshPort -gt 0) { Write-Host "  $CommandName pwsh" }
+    if (-not $WebOnly -and $LinuxSshPort -gt 0) { Write-Host "  $CommandName bash" }
 }
 
 if ($Status) {
+    Import-HostConfigForStatus
     & (Join-Path $projectRoot 'scripts\show-connection.ps1') `
-        -TunnelId $TunnelId -Distro $Distro -WebOnly:$WebOnly
+        -TunnelId $TunnelId `
+        -Distro $Distro `
+        -WindowsSshPort $WindowsSshPort `
+        -LinuxSshPort $LinuxSshPort `
+        -AgentChatPort $AgentChatPort `
+        -WindowsSshUser $WindowsSshUser `
+        -LinuxSshUser $LinuxSshUser `
+        -TcpChannel $TcpChannel `
+        -WebOnly:$WebOnly
 }
 elseif ($Server) {
     Install-Host
