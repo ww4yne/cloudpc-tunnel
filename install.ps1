@@ -478,38 +478,30 @@ function Ensure-Wsl {
 }
 
 function Get-OpenSshCapability {
-    # Prefer the Get-WindowsCapability cmdlet, but some Windows images hit a
-    # broken DISM PowerShell/COM binding ("Class not registered") even though
-    # the classic dism.exe CLI works fine. Fall back to dism.exe in that case.
-    try {
-        return Get-WindowsCapability -Online -ErrorAction Stop |
-            Where-Object Name -Like 'OpenSSH.Server*' |
-            Select-Object -First 1
+    Write-Host 'Inspecting Windows capability list with dism.exe...' `
+        -ForegroundColor DarkCyan
+    $dismOutput = & dism.exe /Online /Get-Capabilities 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "dism.exe /Get-Capabilities failed (exit $LASTEXITCODE)."
     }
-    catch {
-        Write-Host (
-            'Get-WindowsCapability failed (' + $_.Exception.Message +
-            '); falling back to dism.exe.'
-        ) -ForegroundColor Yellow
-        $dismOutput = & dism.exe /Online /Get-Capabilities 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "dism.exe /Get-Capabilities failed (exit $LASTEXITCODE)."
-        }
-        $name = ($dismOutput |
-            Select-String -Pattern '^Capability Identity\s*:\s*(OpenSSH\.Server\S*)' |
-            ForEach-Object { $_.Matches[0].Groups[1].Value } |
-            Select-Object -First 1)
-        if (-not $name) { return $null }
-        $infoOutput = & dism.exe /Online /Get-CapabilityInfo /CapabilityName:$name 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "dism.exe /Get-CapabilityInfo failed (exit $LASTEXITCODE)."
-        }
-        $state = ($infoOutput |
-            Select-String -Pattern '^State\s*:\s*(\S+)' |
-            ForEach-Object { $_.Matches[0].Groups[1].Value } |
-            Select-Object -First 1)
-        [pscustomobject]@{ Name = $name; State = $state }
+    $name = ($dismOutput |
+        Select-String -Pattern '^Capability Identity\s*:\s*(OpenSSH\.Server\S*)' |
+        ForEach-Object { $_.Matches[0].Groups[1].Value } |
+        Select-Object -First 1)
+    if (-not $name) { return $null }
+
+    Write-Host "Reading OpenSSH capability state: $name" `
+        -ForegroundColor DarkCyan
+    $infoOutput = & dism.exe /Online /Get-CapabilityInfo /CapabilityName:$name 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "dism.exe /Get-CapabilityInfo failed (exit $LASTEXITCODE)."
     }
+    $state = ($infoOutput |
+        Select-String -Pattern '^State\s*:\s*(\S+)' |
+        ForEach-Object { $_.Matches[0].Groups[1].Value } |
+        Select-Object -First 1)
+    Write-Host "OpenSSH capability state: $state" -ForegroundColor DarkCyan
+    [pscustomobject]@{ Name = $name; State = $state }
 }
 
 function Add-OpenSshCapability([string]$Name) {
@@ -548,6 +540,7 @@ function Ensure-WindowsOpenSsh {
     }
 
     $configPath = Join-Path $env:ProgramData 'ssh\sshd_config'
+    Write-Host "Checking sshd_config: $configPath" -ForegroundColor DarkCyan
     if (-not (Test-Path $configPath)) {
         Write-Host 'OpenSSH is installed but not initialized; creating sshd_config.'
         $configDir = Split-Path $configPath -Parent
@@ -631,12 +624,14 @@ Subsystem sftp sftp-server.exe
     if (-not (Test-Path $sshKeygen) -or -not (Test-Path $sshd)) {
         throw "OpenSSH binaries are missing under $openSshDir"
     }
+    Write-Host 'Ensuring OpenSSH host keys...' -ForegroundColor DarkCyan
     & $sshKeygen -A
     if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen -A failed.' }
 
     # Windows sshd runs as SYSTEM and rejects private host keys with inherited
     # or broad ACLs. Half-initialized capability installs commonly leave these
     # files with the elevated user's inherited permissions.
+    Write-Host 'Securing OpenSSH config and host key ACLs...' -ForegroundColor DarkCyan
     & icacls $configPath /inheritance:r `
         /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to secure sshd_config ACL.' }
@@ -649,11 +644,13 @@ Subsystem sftp sftp-server.exe
         }
     }
 
+    Write-Host 'Validating OpenSSH configuration...' -ForegroundColor DarkCyan
     & $sshd -t -f $configPath
     if ($LASTEXITCODE -ne 0) {
         throw "Generated OpenSSH configuration failed validation: $configPath"
     }
 
+    Write-Host 'Starting Windows OpenSSH service...' -ForegroundColor DarkCyan
     Set-Service sshd -StartupType Automatic
     Restart-Service sshd -ErrorAction SilentlyContinue
     if ((Get-Service sshd).Status -ne 'Running') {
