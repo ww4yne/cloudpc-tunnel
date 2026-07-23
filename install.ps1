@@ -791,9 +791,6 @@ function Add-OpenSshCapability([string]$Name) {
 }
 
 function Start-OpenSshTaskFallback([string]$SshdPath, [string]$ConfigPath) {
-    Write-Host 'OpenSSH service failed; starting process-based sshd fallback...' `
-        -ForegroundColor Yellow
-
     $existing = @(
         Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
             Where-Object {
@@ -815,7 +812,6 @@ function Start-OpenSshTaskFallback([string]$SshdPath, [string]$ConfigPath) {
     do {
         Start-Sleep -Milliseconds 500
         if ($fallback.HasExited) {
-            Write-Warning "Fallback sshd exited with code $($fallback.ExitCode)."
             return $false
         }
         $listeners = @(
@@ -823,8 +819,6 @@ function Start-OpenSshTaskFallback([string]$SshdPath, [string]$ConfigPath) {
                 -ErrorAction SilentlyContinue
         )
         if ($listeners) {
-            Write-Host "Process-based sshd fallback is listening on TCP 22 (PID $($fallback.Id))." `
-                -ForegroundColor Green
             return $true
         }
     } while ((Get-Date) -lt $deadline)
