@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$TunnelId,
+    [string]$Name,
     [string]$Distro = 'Ubuntu',
     [int]$WindowsSshPort = 22,
     [int]$LinuxSshPort = 2222,
@@ -151,6 +152,7 @@ $ports = $tunnelSummary.Ports
     TunnelId = $TunnelId
     WindowsSshUser = $windowsUser
     LinuxSshUser = $linuxUser
+    ProfileName = $Name
     Distro = $Distro
     PublishedPorts = $ports -join ', '
     RequiredPorts = $tunnelSummary.RequiredPorts
@@ -161,7 +163,7 @@ $ports = $tunnelSummary.Ports
 } | Format-List
 
 Write-Host 'Client install command:' -ForegroundColor Cyan
-$profileName = $env:COMPUTERNAME.ToLowerInvariant()
+$profileName = if ($Name) { $Name } else { $env:COMPUTERNAME.ToLowerInvariant() }
 if ($WebOnly) {
     $parts = @(
         '.\install.ps1',

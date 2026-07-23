@@ -184,6 +184,7 @@ Choose:
 At the end, record the values printed by the installer:
 
 ```text
+Cloud PC profile name
 Tunnel ID
 Windows SSH user
 WSL SSH user
@@ -210,6 +211,26 @@ Choose:
 5. SSH users and key paths if you enabled SSH channels.
 The installer writes the `cpctunnel` command under `%USERPROFILE%\bin`.
 Reopen PowerShell if your PATH was updated during installation.
+
+## Multiple Cloud PCs
+
+Each Cloud PC host keeps its own local host configuration. Hosts are not shared
+between users. On a client device, install one profile per Cloud PC:
+
+```powershell
+.\install.ps1 -Client -Name cpcn3y -TunnelId <cpcn3y-tunnel> ...
+.\install.ps1 -Client -Name dbxn3y -TunnelId <dbxn3y-tunnel> ...
+```
+
+Then switch the default profile or pass a profile name to a command:
+
+```powershell
+cpctunnel list
+cpctunnel use cpcn3y
+cpctunnel status
+cpctunnel pwsh dbxn3y
+cpctunnel agent cpcn3y
+```
 
 ## Guided setup on a macOS or Linux client device
 

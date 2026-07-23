@@ -128,6 +128,10 @@ function Invoke-InstallWizard {
         $defaultName = if ($Name) { $Name } elseif ($TunnelId) { $TunnelId.Split('.')[0] } else { $env:COMPUTERNAME.ToLowerInvariant() }
         $script:Name = Read-Text 'Client profile name' $defaultName
     }
+    elseif ($script:Server) {
+        $defaultName = if ($Name) { $Name } else { $env:COMPUTERNAME.ToLowerInvariant() }
+        $script:Name = Read-Text 'Cloud PC profile name for client setup' $defaultName
+    }
 
     if (-not $script:WebOnly -and $script:WindowsSshPort -ne 0) {
         $script:WindowsSshPort = [int](Read-Text 'Windows SSH host port' "$WindowsSshPort")
@@ -433,6 +437,7 @@ function New-ClientInstallCommand(
 
 function Save-HostConfig(
     [string]$SelectedTunnel,
+    [string]$ProfileName,
     [string]$SelectedWindowsUser,
     [string]$SelectedLinuxUser
 ) {
@@ -440,6 +445,7 @@ function Save-HostConfig(
     New-Item -ItemType Directory -Path $serverDir -Force | Out-Null
     [ordered]@{
         SchemaVersion = 1
+        Name = $ProfileName
         TunnelId = $SelectedTunnel
         CommandName = $CommandName
         WebOnly = [bool]$WebOnly
@@ -490,6 +496,9 @@ function Import-HostConfigForStatus {
     }
     if ($scriptBoundParameterNames -notcontains 'TcpChannel' -and $hostConfig.TcpChannel) {
         $script:TcpChannel = @($hostConfig.TcpChannel | ForEach-Object { [string]$_ })
+    }
+    if ($scriptBoundParameterNames -notcontains 'Name' -and $hostConfig.Name) {
+        $script:Name = [string]$hostConfig.Name
     }
 }
 
@@ -949,14 +958,15 @@ function Install-Host {
         }
 
         Write-Host "`ncloudpc-tunnel host is ready." -ForegroundColor Green
+        Write-Host "Profile name: $profileName"
         Write-Host "Tunnel ID : $selectedTunnel"
         if ($AgentChatPort -gt 0) {
             Write-Host "Web Chat  : http://127.0.0.1:$AgentChatPort (private tunnel)"
         }
-        Save-HostConfig $selectedTunnel '' ''
+        $profileName = if ($Name) { $Name } else { $env:COMPUTERNAME.ToLowerInvariant() }
+        Save-HostConfig $selectedTunnel $profileName '' ''
         Write-Host ''
         Write-Host 'Run this from the client checkout:'
-        $profileName = $env:COMPUTERNAME.ToLowerInvariant()
         Write-Host (New-ClientInstallCommand $selectedTunnel $profileName '' '')
         return
     }
@@ -987,9 +997,11 @@ function Install-Host {
     if (-not $windowsUser) {
         $windowsUser = Get-WindowsSshUser
     }
-    Save-HostConfig $selectedTunnel $windowsUser $linuxUser
+    $profileName = if ($Name) { $Name } else { $env:COMPUTERNAME.ToLowerInvariant() }
+    Save-HostConfig $selectedTunnel $profileName $windowsUser $linuxUser
 
     Write-Host "`ncloudpc-tunnel host is ready." -ForegroundColor Green
+    Write-Host "Profile name    : $profileName"
     Write-Host "Tunnel ID       : $selectedTunnel"
     if ($WindowsSshPort -gt 0) { Write-Host "Windows SSH user: $windowsUser" }
     if ($LinuxSshPort -gt 0) { Write-Host "WSL SSH user    : $linuxUser" }
@@ -1001,7 +1013,6 @@ function Install-Host {
     }
     Write-Host ''
     Write-Host 'Run this from the cloudpc-tunnel checkout on the Windows client:'
-    $profileName = $env:COMPUTERNAME.ToLowerInvariant()
     Write-Host (New-ClientInstallCommand $selectedTunnel $profileName $windowsUser $linuxUser)
 }
 
@@ -1046,6 +1057,7 @@ if ($Status) {
     Import-HostConfigForStatus
     & (Join-Path $projectRoot 'scripts\show-connection.ps1') `
         -TunnelId $TunnelId `
+        -Name $Name `
         -Distro $Distro `
         -WindowsSshPort $WindowsSshPort `
         -LinuxSshPort $LinuxSshPort `
