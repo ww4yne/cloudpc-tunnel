@@ -904,10 +904,14 @@ Subsystem sftp sftp-server.exe
     & icacls $configPath /inheritance:r `
         /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to secure sshd_config ACL.' }
+    # Private host keys must be readable by the sshd privilege-separation
+    # worker account. Otherwise foreground `sshd -d` can work as admin while
+    # the Windows service aborts at startup with service exit code 1067.
     foreach ($key in Get-ChildItem (Split-Path $configPath -Parent) `
         -Filter 'ssh_host_*_key' -File -ErrorAction SilentlyContinue) {
         & icacls $key.FullName /inheritance:r `
-            /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
+            /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' 'NT SERVICE\sshd:R' |
+            Out-Null
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to secure host key ACL: $($key.FullName)"
         }
