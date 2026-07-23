@@ -217,6 +217,30 @@ function Assert-TunnelId([string]$Value) {
     }
 }
 
+function Normalize-TunnelId($Value) {
+    foreach ($item in @($Value)) {
+        if (-not $item) { continue }
+        $candidates = @()
+        if ($item -is [string]) {
+            $candidates += $item
+        }
+        else {
+            $candidates += @(
+                [string]$item.tunnel.tunnelId,
+                [string]$item.tunnelId,
+                [string]$item.TunnelId
+            )
+        }
+        foreach ($candidate in $candidates) {
+            $candidate = "$candidate".Trim()
+            if ($candidate -match '^[A-Za-z0-9][A-Za-z0-9.-]*[.][A-Za-z0-9-]+$') {
+                return $candidate
+            }
+        }
+    }
+    return ''
+}
+
 function Assert-Port([int]$Port, [string]$Label) {
     if ($Port -lt 0 -or $Port -gt 65535) {
         throw "$Label must be between 0 and 65535."
@@ -254,8 +278,7 @@ function Ensure-DevtunnelLogin {
 }
 
 function Get-CreatedTunnelId($Created) {
-    $selectedTunnel = [string]$Created.tunnel.tunnelId
-    if (-not $selectedTunnel) { $selectedTunnel = [string]$Created.tunnelId }
+    $selectedTunnel = Normalize-TunnelId $Created
     if (-not $selectedTunnel) {
         throw 'Dev Tunnel was created but its ID was not returned.'
     }
@@ -273,9 +296,9 @@ function Ensure-LinkTunnel([int[]]$Ports) {
     Assert-TunnelId $TunnelId
     $serverDir = Join-Path $stateRoot 'server'
     $savedTunnelFile = Join-Path $serverDir 'tunnel-id'
-    $selectedTunnel = $TunnelId
+    $selectedTunnel = Normalize-TunnelId $TunnelId
     if (-not $selectedTunnel -and (Test-Path $savedTunnelFile)) {
-        $savedTunnel = (Get-Content $savedTunnelFile -Raw).Trim()
+        $savedTunnel = Normalize-TunnelId (Get-Content $savedTunnelFile -Raw)
         if ($savedTunnel) {
             Assert-TunnelId $savedTunnel
             $selectedTunnel = $savedTunnel
@@ -297,11 +320,26 @@ function Ensure-LinkTunnel([int[]]$Ports) {
     }
     else {
         Write-Step 'Creating private cloudpc-tunnel'
-        $created = & devtunnel create `
-            --description 'cloudpc-tunnel private TCP tunnel' --json |
-            ConvertFrom-Json
-        $selectedTunnel = Get-CreatedTunnelId $created
+        $createOutput = @(
+            & devtunnel create --description 'cloudpc-tunnel private TCP tunnel' --json 2>&1
+        )
+        if ($LASTEXITCODE -ne 0) {
+            if ($createOutput) { Write-Host ($createOutput -join [Environment]::NewLine) }
+            throw 'Failed to create Dev Tunnel.'
+        }
+        $jsonLine = @(
+            $createOutput |
+                Where-Object { "$_".TrimStart().StartsWith('{') } |
+                Select-Object -First 1
+        )
+        if (-not $jsonLine) {
+            throw 'Dev Tunnel was created but JSON output was not returned.'
+        }
+        $created = $jsonLine | ConvertFrom-Json
+        $selectedTunnel = Normalize-TunnelId (Get-CreatedTunnelId $created)
     }
+    $selectedTunnel = Normalize-TunnelId $selectedTunnel
+    Assert-TunnelId $selectedTunnel
 
     $portDocument = & devtunnel port list $selectedTunnel --json |
         ConvertFrom-Json
