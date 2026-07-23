@@ -249,7 +249,7 @@ if not isinstance(data, dict):
 print("Profile:", data["Name"])
 print("TunnelId:", data["TunnelId"])
 for ch in data.get("Channels", []):
-    print(f"{ch.get('Name')} {ch.get('Kind')} host:{ch.get('HostPort')}")' "$status_profile_json"
+    print("{} {} host:{}".format(ch.get("Name"), ch.get("Kind"), ch.get("HostPort")))' "$status_profile_json"
     ;;
   pwsh)
     profile="$(profile_or_default "${1:-}")"
