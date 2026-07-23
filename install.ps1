@@ -291,13 +291,37 @@ function Get-ExtraTcpChannels {
 function Ensure-DevtunnelLogin {
     if ('devtunnel' -notin $Transport) { return }
     Install-WingetPackage 'Microsoft.devtunnel' 'devtunnel'
+
+    Write-Step 'Checking Dev Tunnels sign-in'
+    $outFile = [IO.Path]::GetTempFileName()
+    $errFile = [IO.Path]::GetTempFileName()
+    $loggedIn = $false
     try {
-        $login = & devtunnel user show --json 2>$null | ConvertFrom-Json
+        $process = Start-Process -FilePath 'devtunnel' `
+            -ArgumentList 'user show' `
+            -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput $outFile `
+            -RedirectStandardError $errFile
+        $text = @(
+            (Get-Content $outFile -Raw -ErrorAction SilentlyContinue),
+            (Get-Content $errFile -Raw -ErrorAction SilentlyContinue)
+        ) -join "`n"
+        if ($process.ExitCode -eq 0 -and
+            $text -match '(?i)logged in' -and
+            $text -notmatch '(?i)(expired|login required|not logged)') {
+            $loggedIn = $true
+            Write-Host ($text.Trim())
+        }
     }
     catch {
-        $login = $null
+        $loggedIn = $false
     }
-    if (-not $login -or $login.status -ne 'Logged in') {
+    finally {
+        Remove-Item $outFile, $errFile -Force -ErrorAction SilentlyContinue
+    }
+
+    if (-not $loggedIn) {
+        Write-Host 'Signing in to Dev Tunnels...' -ForegroundColor Yellow
         & devtunnel user login @(Get-DevtunnelLoginArguments)
         if ($LASTEXITCODE -ne 0) { throw 'Dev Tunnel login failed.' }
     }
