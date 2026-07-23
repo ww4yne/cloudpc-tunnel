@@ -41,12 +41,48 @@ require() {
   }
 }
 
+ensure_devtunnel() {
+  if command -v devtunnel >/dev/null 2>&1; then
+    return
+  fi
+
+  echo "Microsoft Dev Tunnels CLI (devtunnel) is required for this client."
+  if ! read_yes_no 'Install devtunnel now?' y; then
+    echo "Install devtunnel and rerun this script." >&2
+    echo "macOS: brew install --cask devtunnel" >&2
+    echo "macOS/Linux: curl -sL https://aka.ms/DevTunnelCliInstall | bash" >&2
+    exit 1
+  fi
+
+  if command -v brew >/dev/null 2>&1; then
+    brew install --cask devtunnel
+  else
+    require curl
+    curl -sL https://aka.ms/DevTunnelCliInstall | bash
+  fi
+
+  if ! command -v devtunnel >/dev/null 2>&1; then
+    echo "devtunnel was installed but is not on PATH. Open a new shell or add it to PATH, then rerun this script." >&2
+    exit 1
+  fi
+}
+
+ensure_devtunnel_login() {
+  if devtunnel user show >/dev/null 2>&1; then
+    return
+  fi
+
+  echo "Dev Tunnels login is required. Complete the browser login flow."
+  devtunnel user login
+}
+
 echo "cloudpc-tunnel client setup"
 echo "This installer configures a macOS/Linux client profile."
 
 require python3
 require ssh
-require devtunnel
+ensure_devtunnel
+ensure_devtunnel_login
 
 name="$(read_text 'Profile name' "${HOSTNAME:-cloudpc}")"
 tunnel_id="$(read_text 'Full Dev Tunnel ID with cluster suffix')"

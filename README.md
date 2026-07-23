@@ -120,7 +120,7 @@ Feature-specific client requirements:
 
 | Scenario | Additional requirements |
 | --- | --- |
-| Microsoft Dev Tunnels transport | Microsoft Dev Tunnels CLI and access to the same private tunnel as the Cloud PC. |
+| Microsoft Dev Tunnels transport | Microsoft Dev Tunnels CLI and access to the same private tunnel as the Cloud PC. The Windows installer installs the CLI with WinGet when missing; the macOS/Linux installer prompts before installing it. |
 | SSH / SCP / SFTP | OpenSSH client tools: `ssh`, `scp`, and `sftp`. |
 | Web or WebSocket channel | A browser or client tool that can connect to `127.0.0.1:<local-port>`. |
 | Web Chat | A browser. Microsoft Edge is used when available. |
@@ -239,7 +239,8 @@ can run from macOS or Linux when these tools are available:
 
 - `sh`
 - `ssh`, `scp`, and `sftp`
-- Microsoft Dev Tunnels CLI (`devtunnel`) for Dev Tunnels transport
+- Microsoft Dev Tunnels CLI (`devtunnel`) for Dev Tunnels transport. If it is
+  missing, the installer prompts before installing it.
 
 From the repository checkout:
 
@@ -251,6 +252,9 @@ The installer writes `cpctunnel` to `~/.local/bin` by default and stores profile
 state under `~/.cloudpc-tunnel`.
 
 If `~/.local/bin` is not on your `PATH`, add it in your shell profile.
+
+The client installer also checks Dev Tunnels login and runs
+`devtunnel user login` when needed.
 
 ## Common commands
 
