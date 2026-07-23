@@ -23,7 +23,7 @@ param(
     [string[]]$TcpChannel = @(),
     [string]$AgentWorkingDirectory = '~',
     [ValidateSet('github', 'microsoft', 'github-device-code', 'microsoft-device-code')]
-    [string]$DevTunnelLoginProvider = 'microsoft',
+    [string]$DevTunnelLoginProvider = 'microsoft-device-code',
     [switch]$SkipPackageInstall
 )
 
@@ -132,16 +132,16 @@ function Invoke-InstallWizard {
     if (-not $script:Status) {
         $script:CommandName = Read-Text 'CLI command name' $CommandName
         $loginChoice = Read-Menu 'Dev Tunnels login provider' @(
-            'Microsoft / Entra account (recommended for Windows 365)',
-            'GitHub account',
+            'Microsoft / Entra account with device code (recommended for Windows 365 Cloud PCs)',
+            'Microsoft / Entra account with browser login',
             'GitHub account with device code',
-            'Microsoft / Entra account with device code'
+            'GitHub account with browser login'
         ) 1
         $script:DevTunnelLoginProvider = switch ($loginChoice) {
-            1 { 'microsoft' }
-            2 { 'github' }
+            1 { 'microsoft-device-code' }
+            2 { 'microsoft' }
             3 { 'github-device-code' }
-            4 { 'microsoft-device-code' }
+            4 { 'github' }
         }
     }
     $script:TunnelId = Read-Text 'Existing Dev Tunnel ID with cluster suffix, or blank to create/use one' $TunnelId
@@ -522,7 +522,7 @@ function New-ClientInstallCommand(
     $args.Add((Quote-InstallArgument $ProfileName))
     $args.Add('-CommandName')
     $args.Add((Quote-InstallArgument $CommandName))
-    if ($DevTunnelLoginProvider -ne 'microsoft') {
+    if ($DevTunnelLoginProvider -ne 'microsoft-device-code') {
         $args.Add('-DevTunnelLoginProvider')
         $args.Add((Quote-InstallArgument $DevTunnelLoginProvider))
     }

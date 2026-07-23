@@ -120,7 +120,7 @@ Feature-specific client requirements:
 
 | Scenario | Additional requirements |
 | --- | --- |
-| Microsoft Dev Tunnels transport | Microsoft Dev Tunnels CLI and access to the same private tunnel as the Cloud PC. The Windows installer installs the CLI with WinGet when missing; the macOS/Linux installer prompts before installing it. Microsoft/Entra browser login is the default; GitHub login is an explicit option. |
+| Microsoft Dev Tunnels transport | Microsoft Dev Tunnels CLI and access to the same private tunnel as the Cloud PC. The Windows installer installs the CLI with WinGet when missing; the macOS/Linux installer prompts before installing it. Microsoft/Entra device-code login is the default because it avoids stale embedded-browser token caches on Cloud PCs; browser and GitHub login are explicit options. |
 | SSH / SCP / SFTP | OpenSSH client tools: `ssh`, `scp`, and `sftp`. |
 | Web or WebSocket channel | A browser or client tool that can connect to `127.0.0.1:<local-port>`. |
 | Web Chat | A browser. Microsoft Edge is used when available. |

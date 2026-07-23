@@ -12,7 +12,7 @@ windows_user=""
 linux_user=""
 agent_port="8787"
 tcp_channels=""
-devtunnel_login="microsoft"
+devtunnel_login="microsoft-device-code"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
