@@ -791,39 +791,39 @@ function Add-OpenSshCapability([string]$Name) {
 }
 
 function Start-OpenSshTaskFallback([string]$SshdPath, [string]$ConfigPath) {
-    Write-Host 'OpenSSH service failed; starting task-based sshd fallback...' `
+    Write-Host 'OpenSSH service failed; starting process-based sshd fallback...' `
         -ForegroundColor Yellow
-    $taskName = 'CloudPcTunnelSshd'
-    $existingTask = Get-ScheduledTask -TaskName $taskName `
-        -ErrorAction SilentlyContinue
-    if ($existingTask) {
-        try { $existingTask | Stop-ScheduledTask -ErrorAction SilentlyContinue } catch {}
+
+    $existing = @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.CommandLine -and
+                $_.CommandLine -match [regex]::Escape($SshdPath) -and
+                $_.CommandLine -match '\s-D\s'
+            }
+    )
+    foreach ($process in $existing) {
+        Stop-Process -Id ([int]$process.ProcessId) -Force `
+            -ErrorAction SilentlyContinue
     }
 
-    $action = New-ScheduledTaskAction -Execute $SshdPath `
-        -Argument ('-D -f "{0}"' -f $ConfigPath)
-    $trigger = New-ScheduledTaskTrigger -AtLogOn `
-        -User ([Security.Principal.WindowsIdentity]::GetCurrent().Name)
-    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' `
-        -RunLevel Highest
-    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
-        -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
-        -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
-    Register-ScheduledTask -TaskName $taskName -Action $action `
-        -Trigger $trigger -Principal $principal -Settings $settings `
-        -Description 'Runs cloudpc-tunnel fallback Windows OpenSSH daemon.' `
-        -Force | Out-Null
-    Start-ScheduledTask -TaskName $taskName
+    $fallback = Start-Process -FilePath $SshdPath `
+        -ArgumentList @('-D', '-f', $ConfigPath) `
+        -WindowStyle Hidden -PassThru
 
     $deadline = (Get-Date).AddSeconds(20)
     do {
         Start-Sleep -Milliseconds 500
+        if ($fallback.HasExited) {
+            Write-Warning "Fallback sshd exited with code $($fallback.ExitCode)."
+            return $false
+        }
         $listeners = @(
             Get-NetTCPConnection -State Listen -LocalPort 22 `
                 -ErrorAction SilentlyContinue
         )
         if ($listeners) {
-            Write-Host 'Task-based sshd fallback is listening on TCP 22.' `
+            Write-Host "Process-based sshd fallback is listening on TCP 22 (PID $($fallback.Id))." `
                 -ForegroundColor Green
             return $true
         }
