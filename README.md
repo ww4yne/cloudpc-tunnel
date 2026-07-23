@@ -192,6 +192,8 @@ Suggested client install command
 ```
 
 The tunnel ID should include its cluster suffix.
+The host installer prints separate setup commands for Windows clients and
+macOS/Linux clients.
 
 ## Guided setup on a Windows client device
 

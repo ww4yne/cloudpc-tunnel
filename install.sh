@@ -6,6 +6,29 @@ PROFILES_DIR="$CONFIG_DIR/profiles"
 ACTIVE_FILE="$CONFIG_DIR/active-profile"
 BIN_DIR="${CLOUDPC_TUNNEL_BIN:-$HOME/.local/bin}"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+name=""
+tunnel_id=""
+windows_user=""
+linux_user=""
+agent_port="8787"
+tcp_channels=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --name) name="$2"; shift 2 ;;
+    --tunnel-id) tunnel_id="$2"; shift 2 ;;
+    --windows-ssh-user) windows_user="$2"; shift 2 ;;
+    --linux-ssh-user) linux_user="$2"; shift 2 ;;
+    --agent-chat-port) agent_port="$2"; shift 2 ;;
+    --tcp-channel) tcp_channels="${tcp_channels}${tcp_channels:+
+}$2"; shift 2 ;;
+    -h|--help)
+      echo "Usage: sh ./install.sh [--name NAME] [--tunnel-id ID] [--windows-ssh-user USER] [--linux-ssh-user USER] [--agent-chat-port PORT] [--tcp-channel name=port[:kind]]"
+      exit 0
+      ;;
+    *) echo "Unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
 
 read_text() {
   prompt="$1"
@@ -84,11 +107,11 @@ require ssh
 ensure_devtunnel
 ensure_devtunnel_login
 
-name="$(read_text 'Profile name' "${HOSTNAME:-cloudpc}")"
-tunnel_id="$(read_text 'Full Dev Tunnel ID with cluster suffix')"
-windows_user="$(read_text 'Windows SSH user, blank to skip Windows SSH')"
-linux_user="$(read_text 'WSL SSH user, blank to skip WSL SSH')"
-agent_port="$(read_text 'Web Chat host port, 0 to disable' '8787')"
+name="${name:-$(read_text 'Profile name' "${HOSTNAME:-cloudpc}")}"
+tunnel_id="${tunnel_id:-$(read_text 'Full Dev Tunnel ID with cluster suffix')}"
+windows_user="${windows_user:-$(read_text 'Windows SSH user, blank to skip Windows SSH')}"
+linux_user="${linux_user:-$(read_text 'WSL SSH user, blank to skip WSL SSH')}"
+agent_port="${agent_port:-$(read_text 'Web Chat host port, 0 to disable' '8787')}"
 
 tmp_base="${TMPDIR:-/tmp}"
 channels_file="$(mktemp "${tmp_base%/}/cpctunnel.XXXXXX")"
@@ -130,11 +153,14 @@ if int(agent_port or "0") > 0:
 json.dump(channels, open(path, "w", encoding="utf-8"))
 PY
 
-while read_yes_no 'Add a custom TCP channel?' n; do
-  channel_name="$(read_text 'Channel name')"
-  channel_port="$(read_text 'Cloud PC host port')"
-  channel_kind="$(read_text 'Kind label' 'tcp')"
-  python3 - "$channels_file" "$name" "$channel_name" "$channel_port" "$channel_kind" <<'PY'
+if [ -n "$tcp_channels" ]; then
+  printf '%s\n' "$tcp_channels" | while IFS= read -r channel; do
+    [ -n "$channel" ] || continue
+    channel_name="$(printf '%s' "$channel" | sed -E 's/^([^:=]+).*/\1/')"
+    channel_port="$(printf '%s' "$channel" | sed -E 's/^[^:=]+[:=]([0-9]+).*/\1/')"
+    channel_kind="$(printf '%s' "$channel" | sed -nE 's/^[^:=]+[:=][0-9]+:([^:]+)$/\1/p')"
+    channel_kind="${channel_kind:-tcp}"
+    python3 - "$channels_file" "$name" "$channel_name" "$channel_port" "$channel_kind" <<'PY'
 import json, sys
 path, profile, name, port, kind = sys.argv[1:]
 channels = json.load(open(path, encoding="utf-8"))
@@ -149,7 +175,29 @@ channels.append({
 })
 json.dump(channels, open(path, "w", encoding="utf-8"))
 PY
-done
+  done
+else
+  while read_yes_no 'Add a custom TCP channel?' n; do
+    channel_name="$(read_text 'Channel name')"
+    channel_port="$(read_text 'Cloud PC host port')"
+    channel_kind="$(read_text 'Kind label' 'tcp')"
+    python3 - "$channels_file" "$name" "$channel_name" "$channel_port" "$channel_kind" <<'PY'
+import json, sys
+path, profile, name, port, kind = sys.argv[1:]
+channels = json.load(open(path, encoding="utf-8"))
+channels.append({
+    "Name": name,
+    "Kind": kind,
+    "HostPort": int(port),
+    "User": "",
+    "Session": "",
+    "IdentityFile": "",
+    "HostKeyAlias": f"cpctunnel-{profile}-{name}",
+})
+json.dump(channels, open(path, "w", encoding="utf-8"))
+PY
+  done
+fi
 
 mkdir -p "$PROFILES_DIR" "$BIN_DIR"
 profile_file="$PROFILES_DIR/$name.json"

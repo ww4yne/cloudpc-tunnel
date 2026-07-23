@@ -435,6 +435,53 @@ function New-ClientInstallCommand(
     return ($args -join ' ')
 }
 
+function New-PosixClientInstallCommand(
+    [string]$SelectedTunnel,
+    [string]$ProfileName,
+    [string]$SelectedWindowsUser,
+    [string]$SelectedLinuxUser
+) {
+    $args = [Collections.Generic.List[string]]::new()
+    $args.Add('sh ./install.sh')
+    $args.Add('--name')
+    $args.Add((Quote-InstallArgument $ProfileName))
+    $args.Add('--tunnel-id')
+    $args.Add((Quote-InstallArgument $SelectedTunnel))
+    if (-not $WebOnly -and $WindowsSshPort -gt 0 -and $SelectedWindowsUser) {
+        $args.Add('--windows-ssh-user')
+        $args.Add((Quote-InstallArgument $SelectedWindowsUser))
+    }
+    if (-not $WebOnly -and $LinuxSshPort -gt 0 -and $SelectedLinuxUser) {
+        $args.Add('--linux-ssh-user')
+        $args.Add((Quote-InstallArgument $SelectedLinuxUser))
+    }
+    if ($AgentChatPort -ne 8787) {
+        $args.Add('--agent-chat-port')
+        $args.Add("$AgentChatPort")
+    }
+    foreach ($channel in $TcpChannel) {
+        $args.Add('--tcp-channel')
+        $args.Add((Quote-InstallArgument $channel))
+    }
+    return ($args -join ' ')
+}
+
+function Write-ClientInstallHints(
+    [string]$SelectedTunnel,
+    [string]$ProfileName,
+    [string]$SelectedWindowsUser,
+    [string]$SelectedLinuxUser
+) {
+    Write-Host ''
+    Write-Host 'Windows client:' -ForegroundColor Cyan
+    Write-Host (New-ClientInstallCommand $SelectedTunnel $ProfileName $SelectedWindowsUser $SelectedLinuxUser)
+    Write-Host ''
+    Write-Host 'macOS/Linux client:' -ForegroundColor Cyan
+    Write-Host 'git clone https://github.com/ww4yne/cloudpc-tunnel.git'
+    Write-Host 'cd cloudpc-tunnel'
+    Write-Host (New-PosixClientInstallCommand $SelectedTunnel $ProfileName $SelectedWindowsUser $SelectedLinuxUser)
+}
+
 function Save-HostConfig(
     [string]$SelectedTunnel,
     [string]$ProfileName,
@@ -965,9 +1012,7 @@ function Install-Host {
         }
         $profileName = if ($Name) { $Name } else { $env:COMPUTERNAME.ToLowerInvariant() }
         Save-HostConfig $selectedTunnel $profileName '' ''
-        Write-Host ''
-        Write-Host 'Run this from the client checkout:'
-        Write-Host (New-ClientInstallCommand $selectedTunnel $profileName '' '')
+        Write-ClientInstallHints $selectedTunnel $profileName '' ''
         return
     }
 
@@ -1011,9 +1056,7 @@ function Install-Host {
         Write-Host 'If the WSL user has no SSH password, run:'
         Write-Host "  wsl.exe -d $Distro -u root -- passwd $linuxUser"
     }
-    Write-Host ''
-    Write-Host 'Run this from the cloudpc-tunnel checkout on the Windows client:'
-    Write-Host (New-ClientInstallCommand $selectedTunnel $profileName $windowsUser $linuxUser)
+    Write-ClientInstallHints $selectedTunnel $profileName $windowsUser $linuxUser
 }
 
 function Install-Client {
