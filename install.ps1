@@ -309,6 +309,16 @@ function Get-DevtunnelLoginArguments {
     }
 }
 
+function Get-DevtunnelDeviceLoginArguments {
+    switch ($DevTunnelLoginProvider) {
+        'github' { @('-g', '-d') }
+        'microsoft' { @('-d') }
+        'github-device-code' { @('-g', '-d') }
+        'microsoft-device-code' { @('-d') }
+        default { @('-d') }
+    }
+}
+
 function Test-DevtunnelAuthError([object[]]$Output) {
     $text = ($Output | ForEach-Object { "$_" }) -join [Environment]::NewLine
     return $text -match '(?i)(login token expired|login required|not logged|not authenticated|unauthorized|forbidden)'
@@ -360,6 +370,20 @@ function Invoke-DevtunnelWithLoginRetry([string[]]$Arguments) {
         $result = Invoke-RawDevtunnel $Arguments
         $output = $result.Output
         $exitCode = $result.ExitCode
+        if ($exitCode -ne 0 -and (Test-DevtunnelAuthError $output)) {
+            Write-Host (
+                'Dev Tunnels browser login still returned an expired token. ' +
+                'Trying device-code login...'
+            ) -ForegroundColor Yellow
+            & devtunnel user logout *> $null
+            & devtunnel user login @(Get-DevtunnelDeviceLoginArguments)
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Dev Tunnel device-code login failed.'
+            }
+            $result = Invoke-RawDevtunnel $Arguments
+            $output = $result.Output
+            $exitCode = $result.ExitCode
+        }
     }
     [pscustomobject]@{
         ExitCode = $exitCode
