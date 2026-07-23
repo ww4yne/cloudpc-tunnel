@@ -351,6 +351,10 @@ cpctunnel agent
 The browser opens the private Web Chat surface through the selected transport.
 Work runs on the Cloud PC.
 
+The default Web Chat working directory is the Cloud PC user's home directory.
+When the installer asks for a working directory, `~` and paths such as
+`~/source` are supported.
+
 ## Automated setup
 
 The wizard is recommended for first-time use. You can also pass parameters

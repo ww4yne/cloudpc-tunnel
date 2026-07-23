@@ -21,7 +21,7 @@ param(
     [ValidateSet('devtunnel', 'ssh-jump')]
     [string[]]$Transport = @('devtunnel'),
     [string[]]$TcpChannel = @(),
-    [string]$AgentWorkingDirectory = '',
+    [string]$AgentWorkingDirectory = '~',
     [switch]$SkipPackageInstall
 )
 
@@ -153,7 +153,7 @@ function Invoke-InstallWizard {
 
     $script:AgentChatPort = [int](Read-Text 'Web Chat host port, 0 to disable' "$AgentChatPort")
     if ($script:Server -and $script:AgentChatPort -gt 0) {
-        $script:AgentWorkingDirectory = Read-Text 'Default agent working directory, blank for project root' $AgentWorkingDirectory
+        $script:AgentWorkingDirectory = Read-Text 'Default agent working directory' $AgentWorkingDirectory
     }
 
     $channels = [Collections.Generic.List[string]]::new()

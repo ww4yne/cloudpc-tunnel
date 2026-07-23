@@ -9,6 +9,16 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 
+function Resolve-WorkingDirectory([string]$Path) {
+    if (-not $Path) { return $HOME }
+    if ($Path -eq '~') { return $HOME }
+    if ($Path -match '^~[\\/](.*)$') {
+        $relative = $Matches[1].Replace('/', [IO.Path]::DirectorySeparatorChar)
+        return Join-Path $HOME $relative
+    }
+    return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+}
+
 $wslKeepalive = $null
 if (-not $SkipWsl) {
     Write-Host "Starting WSL runtime: $Distro" -ForegroundColor Cyan
@@ -30,9 +40,7 @@ if (-not $SkipWsl) {
     }
 }
 
-if ($WorkingDirectory) {
-    $env:CLOUDPC_AGENT_CWD = $WorkingDirectory
-}
+$env:CLOUDPC_AGENT_CWD = Resolve-WorkingDirectory $WorkingDirectory
 $env:CLOUDPC_AGENT_PORT = "$Port"
 
 Write-Host "Starting Agent Chat on 127.0.0.1:$Port" -ForegroundColor Cyan

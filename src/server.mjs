@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -10,7 +11,15 @@ const publicDir = join(here, '..', 'public');
 const host = process.env.CLOUDPC_AGENT_HOST || '127.0.0.1';
 const port = Number(process.env.CLOUDPC_AGENT_PORT || 8787);
 const copilot = process.env.COPILOT_BIN || 'copilot';
-const defaultCwd = process.env.CLOUDPC_AGENT_CWD || process.cwd();
+function expandHome(input) {
+  if (!input || input === '~') return homedir();
+  if (input.startsWith('~/') || input.startsWith('~\\')) {
+    return join(homedir(), input.slice(2));
+  }
+  return input;
+}
+
+const defaultCwd = expandHome(process.env.CLOUDPC_AGENT_CWD);
 const powershell = process.env.CLOUDPC_POWERSHELL_BIN || [
   join(process.env.ProgramFiles || '', 'PowerShell', '7', 'pwsh.exe'),
   join(
