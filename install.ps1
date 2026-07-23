@@ -23,7 +23,7 @@ param(
     [string[]]$TcpChannel = @(),
     [string]$AgentWorkingDirectory = '~',
     [ValidateSet('github', 'microsoft', 'github-device-code', 'microsoft-device-code')]
-    [string]$DevTunnelLoginProvider = 'microsoft-device-code',
+    [string]$DevTunnelLoginProvider = 'microsoft',
     [switch]$SkipPackageInstall
 )
 
@@ -134,16 +134,16 @@ function Invoke-InstallWizard {
     if (-not $script:Status) {
         $script:CommandName = Read-Text 'CLI command name' $CommandName
         $loginChoice = Read-Menu 'Dev Tunnels login provider' @(
-            'Microsoft / Entra account with device code (recommended for Windows 365 Cloud PCs)',
-            'Microsoft / Entra account with browser login',
-            'GitHub account with device code',
-            'GitHub account with browser login'
+            'Microsoft / Entra account with browser login (recommended)',
+            'Microsoft / Entra account with device code',
+            'GitHub account with browser login',
+            'GitHub account with device code'
         ) 1
         $script:DevTunnelLoginProvider = switch ($loginChoice) {
-            1 { 'microsoft-device-code' }
-            2 { 'microsoft' }
-            3 { 'github-device-code' }
-            4 { 'github' }
+            1 { 'microsoft' }
+            2 { 'microsoft-device-code' }
+            3 { 'github' }
+            4 { 'github-device-code' }
         }
     }
     $script:TunnelId = Read-Text 'Existing Dev Tunnel ID with cluster suffix, or blank to create/use one' $TunnelId
@@ -322,6 +322,8 @@ function Ensure-DevtunnelLogin {
 
     if (-not $loggedIn) {
         Write-Host 'Signing in to Dev Tunnels...' -ForegroundColor Yellow
+        # Clear any stale/expired cached token first so login returns a fresh one.
+        & devtunnel user logout *> $null
         & devtunnel user login @(Get-DevtunnelLoginArguments)
         if ($LASTEXITCODE -ne 0) { throw 'Dev Tunnel login failed.' }
     }
@@ -556,7 +558,7 @@ function New-ClientInstallCommand(
     $args.Add((Quote-InstallArgument $ProfileName))
     $args.Add('-CommandName')
     $args.Add((Quote-InstallArgument $CommandName))
-    if ($DevTunnelLoginProvider -ne 'microsoft-device-code') {
+    if ($DevTunnelLoginProvider -ne 'microsoft') {
         $args.Add('-DevTunnelLoginProvider')
         $args.Add((Quote-InstallArgument $DevTunnelLoginProvider))
     }
