@@ -10,6 +10,8 @@ name=""
 tunnel_id=""
 windows_user=""
 linux_user=""
+windows_identity_file=""
+linux_identity_file=""
 agent_port="8787"
 tcp_channels=""
 devtunnel_login="microsoft"
@@ -20,12 +22,14 @@ while [ "$#" -gt 0 ]; do
     --tunnel-id) tunnel_id="$2"; shift 2 ;;
     --windows-ssh-user) windows_user="$2"; shift 2 ;;
     --linux-ssh-user) linux_user="$2"; shift 2 ;;
+    --windows-identity-file) windows_identity_file="$2"; shift 2 ;;
+    --linux-identity-file) linux_identity_file="$2"; shift 2 ;;
     --agent-chat-port) agent_port="$2"; shift 2 ;;
     --devtunnel-login) devtunnel_login="$2"; shift 2 ;;
     --tcp-channel) tcp_channels="${tcp_channels}${tcp_channels:+
 }$2"; shift 2 ;;
     -h|--help)
-      echo "Usage: sh ./install.sh [--name NAME] [--tunnel-id ID] [--windows-ssh-user USER] [--linux-ssh-user USER] [--agent-chat-port PORT] [--devtunnel-login github|microsoft|github-device-code|microsoft-device-code] [--tcp-channel name=port[:kind]]"
+      echo "Usage: sh ./install.sh [--name NAME] [--tunnel-id ID] [--windows-ssh-user USER] [--windows-identity-file PATH] [--linux-ssh-user USER] [--linux-identity-file PATH] [--agent-chat-port PORT] [--devtunnel-login github|microsoft|github-device-code|microsoft-device-code] [--tcp-channel name=port[:kind]]"
       exit 0
       ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
@@ -143,15 +147,21 @@ ensure_devtunnel_login
 name="${name:-$(read_text 'Profile name' "${HOSTNAME:-cloudpc}")}"
 tunnel_id="${tunnel_id:-$(read_text 'Full Dev Tunnel ID with cluster suffix')}"
 windows_user="${windows_user:-$(read_text 'Windows SSH user, blank to skip Windows SSH')}"
+if [ -n "$windows_user" ] && [ -z "$windows_identity_file" ]; then
+  windows_identity_file="$(read_text 'Windows SSH private key path, blank for password auth')"
+fi
 linux_user="${linux_user:-$(read_text 'WSL SSH user, blank to skip WSL SSH')}"
+if [ -n "$linux_user" ] && [ -z "$linux_identity_file" ]; then
+  linux_identity_file="$(read_text 'WSL SSH private key path, blank for password auth')"
+fi
 agent_port="${agent_port:-$(read_text 'Web Chat host port, 0 to disable' '8787')}"
 
 tmp_base="${TMPDIR:-/tmp}"
 channels_file="$(mktemp "${tmp_base%/}/cpctunnel.XXXXXX")"
 trap 'rm -f "$channels_file"' EXIT
-python3 - "$channels_file" "$name" "$tunnel_id" "$windows_user" "$linux_user" "$agent_port" <<'PY'
+python3 - "$channels_file" "$name" "$tunnel_id" "$windows_user" "$linux_user" "$agent_port" "$windows_identity_file" "$linux_identity_file" <<'PY'
 import json, sys
-path, name, tunnel_id, windows_user, linux_user, agent_port = sys.argv[1:]
+path, name, tunnel_id, windows_user, linux_user, agent_port, windows_identity_file, linux_identity_file = sys.argv[1:]
 channels = []
 if windows_user:
     channels.append({
@@ -160,7 +170,7 @@ if windows_user:
         "HostPort": 22,
         "User": windows_user,
         "Session": "cpctunnel",
-        "IdentityFile": "",
+        "IdentityFile": windows_identity_file,
         "HostKeyAlias": f"cpctunnel-{name}-windows-ssh",
     })
 if linux_user:
@@ -170,7 +180,7 @@ if linux_user:
         "HostPort": 2222,
         "User": linux_user,
         "Session": "cpctunnel",
-        "IdentityFile": "",
+        "IdentityFile": linux_identity_file,
         "HostKeyAlias": f"cpctunnel-{name}-wsl-ssh",
     })
 if int(agent_port or "0") > 0:
@@ -234,9 +244,9 @@ fi
 
 mkdir -p "$PROFILES_DIR" "$BIN_DIR"
 profile_file="$PROFILES_DIR/$name.json"
-python3 - "$profile_file" "$channels_file" "$name" "$tunnel_id" "$windows_user" "$linux_user" "$agent_port" "$devtunnel_login" <<'PY'
+python3 - "$profile_file" "$channels_file" "$name" "$tunnel_id" "$windows_user" "$linux_user" "$agent_port" "$devtunnel_login" "$windows_identity_file" "$linux_identity_file" <<'PY'
 import json, sys
-profile_file, channels_file, name, tunnel_id, windows_user, linux_user, agent_port, devtunnel_login = sys.argv[1:]
+profile_file, channels_file, name, tunnel_id, windows_user, linux_user, agent_port, devtunnel_login, windows_identity_file, linux_identity_file = sys.argv[1:]
 channels = json.load(open(channels_file, encoding="utf-8"))
 profile = {
     "SchemaVersion": 2,
@@ -253,8 +263,8 @@ profile = {
     "WindowsSshPort": 22 if windows_user else 0,
     "LinuxSshPort": 2222 if linux_user else 0,
     "AgentChatPort": int(agent_port or "0"),
-    "WindowsIdentityFile": "",
-    "LinuxIdentityFile": "",
+    "WindowsIdentityFile": windows_identity_file,
+    "LinuxIdentityFile": linux_identity_file,
     "Channels": channels,
 }
 json.dump(profile, open(profile_file, "w", encoding="utf-8"), indent=2)
