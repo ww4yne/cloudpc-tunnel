@@ -291,12 +291,23 @@ function Test-DevtunnelAuthError([object[]]$Output) {
 }
 
 function Invoke-DevtunnelWithLoginRetry([string[]]$Arguments) {
+    function Join-ProcessArguments([string[]]$RawArguments) {
+        @(
+            foreach ($argument in $RawArguments) {
+                if ($argument -notmatch '[\s"]') {
+                    $argument
+                }
+                else {
+                    '"' + ($argument -replace '"', '\"') + '"'
+                }
+            }
+        ) -join ' '
+    }
+
     function Invoke-RawDevtunnel([string[]]$RawArguments) {
         $psi = [Diagnostics.ProcessStartInfo]::new()
         $psi.FileName = 'devtunnel'
-        foreach ($argument in $RawArguments) {
-            $psi.ArgumentList.Add($argument)
-        }
+        $psi.Arguments = Join-ProcessArguments $RawArguments
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
         $psi.UseShellExecute = $false
