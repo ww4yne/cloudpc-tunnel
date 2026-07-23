@@ -790,6 +790,48 @@ function Add-OpenSshCapability([string]$Name) {
     }
 }
 
+function Start-OpenSshTaskFallback([string]$SshdPath, [string]$ConfigPath) {
+    Write-Host 'OpenSSH service failed; starting task-based sshd fallback...' `
+        -ForegroundColor Yellow
+    $taskName = 'CloudPcTunnelSshd'
+    $existingTask = Get-ScheduledTask -TaskName $taskName `
+        -ErrorAction SilentlyContinue
+    if ($existingTask) {
+        try { $existingTask | Stop-ScheduledTask -ErrorAction SilentlyContinue } catch {}
+    }
+
+    $action = New-ScheduledTaskAction -Execute $SshdPath `
+        -Argument ('-D -f "{0}"' -f $ConfigPath)
+    $trigger = New-ScheduledTaskTrigger -AtLogOn `
+        -User ([Security.Principal.WindowsIdentity]::GetCurrent().Name)
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' `
+        -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
+        -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+    Register-ScheduledTask -TaskName $taskName -Action $action `
+        -Trigger $trigger -Principal $principal -Settings $settings `
+        -Description 'Runs cloudpc-tunnel fallback Windows OpenSSH daemon.' `
+        -Force | Out-Null
+    Start-ScheduledTask -TaskName $taskName
+
+    $deadline = (Get-Date).AddSeconds(20)
+    do {
+        Start-Sleep -Milliseconds 500
+        $listeners = @(
+            Get-NetTCPConnection -State Listen -LocalPort 22 `
+                -ErrorAction SilentlyContinue
+        )
+        if ($listeners) {
+            Write-Host 'Task-based sshd fallback is listening on TCP 22.' `
+                -ForegroundColor Green
+            return $true
+        }
+    } while ((Get-Date) -lt $deadline)
+
+    return $false
+}
+
 function Ensure-WindowsOpenSsh {
     Write-Step 'Checking Windows OpenSSH Server'
     $capability = Get-OpenSshCapability
@@ -938,6 +980,9 @@ Subsystem sftp sftp-server.exe
             Start-Service sshd -ErrorAction Stop
         }
         catch {
+            if (Start-OpenSshTaskFallback -SshdPath $sshd -ConfigPath $configPath) {
+                return
+            }
             $events = @(
                 Get-WinEvent -LogName 'OpenSSH/Operational' -MaxEvents 8 `
                     -ErrorAction SilentlyContinue |
