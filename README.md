@@ -404,7 +404,7 @@ directly for repeatable setup.
 .\install.ps1 -Client `
   -Name work-cloudpc `
   -TunnelId <full-tunnel-id.cluster> `
-  -WindowsSshUser <user@example.com> `
+  -WindowsSshUser <DOMAIN\user> `
   -LinuxSshUser <linux-user> `
   -CommandName cpctunnel `
   -TcpChannel webapp=3000:web

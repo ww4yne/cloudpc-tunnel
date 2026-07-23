@@ -137,8 +137,12 @@ function Invoke-InstallWizard {
         $script:WindowsSshPort = [int](Read-Text 'Windows SSH host port' "$WindowsSshPort")
         $script:WindowsSession = Read-Text 'Default Windows psmux session' $WindowsSession
         if ($script:Client) {
-            $script:WindowsSshUser = Read-Text 'Windows SSH user, usually tenant UPN' $WindowsSshUser
+            $script:WindowsSshUser = Read-Text 'Windows SSH user, for example DOMAIN\user' $WindowsSshUser
             $script:WindowsIdentityFile = Read-Text 'Windows SSH private key path, blank for password auth' $WindowsIdentityFile
+        }
+        elseif ($script:Server) {
+            $defaultSshUser = if ($WindowsSshUser) { $WindowsSshUser } else { Get-WindowsSshUser }
+            $script:WindowsSshUser = Read-Text 'Windows SSH user for client setup' $defaultSshUser
         }
 
     }
@@ -189,9 +193,9 @@ function Assert-Administrator {
 }
 
 function Get-WindowsSshUser {
-    $upn = (& whoami.exe /upn 2>$null | Out-String).Trim()
-    if ($LASTEXITCODE -eq 0 -and $upn -match '^[^@\s]+@[^@\s]+$') {
-        return $upn
+    $whoami = (& whoami.exe 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0 -and $whoami) {
+        return $whoami
     }
     return [Security.Principal.WindowsIdentity]::GetCurrent().Name
 }

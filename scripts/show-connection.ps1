@@ -60,9 +60,9 @@ function Get-TunnelSummary([string]$Id) {
 }
 
 function Get-WindowsSshUser {
-    $upn = (& whoami.exe /upn 2>$null | Out-String).Trim()
-    if ($LASTEXITCODE -eq 0 -and $upn -match '^[^@\s]+@[^@\s]+$') {
-        return $upn
+    $whoami = (& whoami.exe 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0 -and $whoami) {
+        return $whoami
     }
     return [Security.Principal.WindowsIdentity]::GetCurrent().Name
 }
