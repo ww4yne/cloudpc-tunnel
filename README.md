@@ -263,6 +263,7 @@ The client installer also checks Dev Tunnels login and runs
 ```powershell
 cpctunnel list
 cpctunnel use <profile>
+cpctunnel remove <profile>
 cpctunnel status
 cpctunnel reconnect
 cpctunnel disconnect
@@ -273,6 +274,7 @@ cpctunnel logs
 | --- | --- |
 | `cpctunnel list` | List configured Cloud PC profiles |
 | `cpctunnel use <profile>` | Make a profile the default |
+| `cpctunnel remove <profile>` | Remove a local profile and connector state without deleting the Dev Tunnel |
 | `cpctunnel status` | Show tunnel and channel readiness |
 | `cpctunnel reconnect` | Restart the local connector |
 | `cpctunnel disconnect` | Stop the local connector |

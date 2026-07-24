@@ -3,7 +3,7 @@ param(
     [Parameter(Position = 0)]
     [ValidateSet(
         'pwsh', 'bash', 'agent', 'status', 'reconnect', 'disconnect',
-        'logs', 'port', 'open', 'list', 'use'
+        'logs', 'port', 'open', 'list', 'use', 'remove'
     )]
     [string]$Action = 'pwsh',
     [Parameter(Position = 1)]
@@ -79,6 +79,13 @@ if ($Action -eq 'use') {
     return
 }
 
+if ($Action -eq 'remove') {
+    if (-not $Target) { throw 'Usage: cpctunnel remove <profile>' }
+    if ($Target -notmatch '^[A-Za-z0-9_.-]+$') {
+        throw 'Invalid profile name.'
+    }
+}
+
 if ($Action -notin @('port', 'open') -and $Target -and -not $Profile) {
     $Profile = $Target
 }
@@ -97,6 +104,9 @@ else {
     ''
 }
 if (-not (Test-Path $configFile)) {
+    if ($Action -eq 'remove' -and $profileName) {
+        throw "Profile not found: $profileName. Run 'cpctunnel list'."
+    }
     throw (
         "No active cloudpc-tunnel profile. Run 'cpctunnel list' or install a Client " +
         'profile with install.ps1 -Client -Name <name>.'
@@ -115,6 +125,32 @@ function Resolve-Devtunnel {
     throw 'devtunnel CLI not found.'
 }
 
+function Get-DevtunnelLoginCommand {
+    switch ([string]$config.DevTunnelLoginProvider) {
+        'github' { return 'devtunnel user login -g' }
+        'github-device-code' { return 'devtunnel user login -g -d' }
+        'microsoft-device-code' { return 'devtunnel user login -d' }
+        default { return 'devtunnel user login' }
+    }
+}
+
+function Assert-DevtunnelLogin {
+    $output = @(& (Resolve-Devtunnel) user show 2>&1)
+    $exitCode = $LASTEXITCODE
+    $text = ($output | ForEach-Object { "$_" }) -join [Environment]::NewLine
+    if ($text -match
+        '(?i)(login token expired|login required|not logged|not authenticated)') {
+        throw (
+            "Dev Tunnels login is missing or expired; cpctunnel cannot inspect profile '$profileName'. Run: " +
+            (Get-DevtunnelLoginCommand)
+        )
+    }
+    if ($exitCode -ne 0) {
+        $detail = if ($text) { " $($text.Trim())" } else { '' }
+        throw "Could not inspect Dev Tunnels login.$detail"
+    }
+}
+
 function Get-TunnelDocument([string]$TunnelId) {
     $json = & (Resolve-Devtunnel) show $TunnelId --json 2>$null
     if ($LASTEXITCODE -ne 0 -or -not $json) { return $null }
@@ -127,22 +163,47 @@ function Get-TunnelDocument([string]$TunnelId) {
 }
 
 function Ensure-ActiveTunnel {
+    Assert-DevtunnelLogin
     $currentId = [string]$config.TunnelId
     $current = Get-TunnelDocument $currentId
     if ($current -and [int]$current.tunnel.hostConnections -ge 1) { return }
+    $requiredPorts = @(Get-ChannelPorts)
+    $requiredPortText = if ($requiredPorts.Count -gt 0) {
+        $requiredPorts -join ', '
+    } else {
+        'none'
+    }
 
-    $json = & (Resolve-Devtunnel) list --json 2>$null
-    if ($LASTEXITCODE -ne 0 -or -not $json) {
-        throw "Could not inspect Dev Tunnels while '$currentId' has no active host."
+    $errFile = [IO.Path]::GetTempFileName()
+    try {
+        $json = & (Resolve-Devtunnel) list --json 2>$errFile
+        $listExitCode = $LASTEXITCODE
+        $stderr = Get-Content $errFile -Raw -ErrorAction SilentlyContinue
+    }
+    finally {
+        Remove-Item $errFile -Force -ErrorAction SilentlyContinue
+    }
+    if ($listExitCode -ne 0 -or -not $json) {
+        $detail = if ($stderr) {
+            " Dev Tunnels said: $($stderr.Trim())"
+        } else { '' }
+        throw (
+            "Profile '$profileName' is configured for Dev Tunnel '$currentId', " +
+            "but that tunnel has no active host and cpctunnel could not list " +
+            "replacement tunnels. Required host ports: $requiredPortText.$detail"
+        )
     }
     try {
         $catalog = $json | ConvertFrom-Json
     }
     catch {
-        throw 'Dev Tunnel returned an invalid tunnel list.'
+        throw (
+            "Profile '$profileName' is configured for Dev Tunnel '$currentId', " +
+            'but that tunnel has no active host and Dev Tunnels returned an ' +
+            'invalid replacement tunnel list.'
+        )
     }
 
-    $requiredPorts = @(Get-ChannelPorts)
     $replacements = @(
         foreach ($candidate in @($catalog.tunnels)) {
             if ([int]$candidate.hostConnections -lt 1) { continue }
@@ -175,8 +236,10 @@ function Ensure-ActiveTunnel {
 
     if ($replacements.Count -eq 0) {
         throw (
-            "Configured tunnel '$currentId' has no active host, and no online " +
-            'replacement exposes all required ports.'
+            "Profile '$profileName' is configured for Dev Tunnel '$currentId', " +
+            'but that tunnel has no active host. Start or wake the Cloud PC ' +
+            'host, then retry. No online replacement tunnel exposes all ' +
+            "required ports: $requiredPortText."
         )
     }
 
@@ -635,6 +698,23 @@ switch ($Action) {
         if ($ports.Count -gt 0) { Start-Connector $ports }
     }
     'disconnect' { Stop-Connector }
+    'remove' {
+        Stop-Connector
+        Remove-Item $configFile -Force
+        Remove-Item $stateDir -Recurse -Force -ErrorAction SilentlyContinue
+        if ((Get-ActiveProfile) -eq $profileName) {
+            Remove-Item $activeFile -Force -ErrorAction SilentlyContinue
+            Write-Host (
+                "Removed active cloudpc-tunnel profile '$profileName'. " +
+                "Run 'cpctunnel use <profile>' to choose a new default."
+            ) -ForegroundColor Yellow
+        }
+        else {
+            Write-Host "Removed cloudpc-tunnel profile '$profileName'." `
+                -ForegroundColor Green
+        }
+        Write-Host "Dev Tunnel '$($config.TunnelId)' was not deleted."
+    }
     'logs' {
         Get-Content $outLog, $errLog -Tail 100 -Wait `
             -ErrorAction SilentlyContinue

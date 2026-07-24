@@ -10,6 +10,7 @@ usage() {
 Usage:
   cpctunnel list
   cpctunnel use <profile>
+  cpctunnel remove <profile>
   cpctunnel status [profile]
   cpctunnel reconnect [profile]
   cpctunnel disconnect [profile]
@@ -37,6 +38,15 @@ active_profile() {
 
 profile_file() {
   printf '%s/profiles/%s.json\n' "$CONFIG_DIR" "$1"
+}
+
+validate_profile_name() {
+  case "$1" in
+    ""|*[!A-Za-z0-9_.-]*)
+      echo "Invalid profile name: $1" >&2
+      exit 1
+      ;;
+  esac
 }
 
 json_value() {
@@ -219,10 +229,29 @@ case "$cmd" in
   use)
     profile="${1:-}"
     [ -n "$profile" ] || { echo "Usage: cpctunnel use <profile>" >&2; exit 1; }
+    validate_profile_name "$profile"
     [ -f "$(profile_file "$profile")" ] || { echo "Profile not found: $profile" >&2; exit 1; }
     mkdir -p "$CONFIG_DIR"
     printf '%s\n' "$profile" >"$ACTIVE_FILE"
     echo "Active cloudpc-tunnel profile: $profile"
+    ;;
+  remove)
+    profile="${1:-}"
+    [ -n "$profile" ] || { echo "Usage: cpctunnel remove <profile>" >&2; exit 1; }
+    validate_profile_name "$profile"
+    file="$(profile_file "$profile")"
+    [ -f "$file" ] || { echo "Profile not found: $profile" >&2; exit 1; }
+    tunnel_id="$(json_value "$file" TunnelId)"
+    stop_connector "$profile"
+    rm -f "$file"
+    rm -rf "$(state_dir "$profile")"
+    if [ "$(active_profile)" = "$profile" ]; then
+      rm -f "$ACTIVE_FILE"
+      echo "Removed active cloudpc-tunnel profile '$profile'. Run 'cpctunnel use <profile>' to choose a new default."
+    else
+      echo "Removed cloudpc-tunnel profile '$profile'."
+    fi
+    echo "Dev Tunnel '$tunnel_id' was not deleted."
     ;;
   reconnect)
     profile="$(profile_or_default "${1:-}")"

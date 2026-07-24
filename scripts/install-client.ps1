@@ -14,6 +14,8 @@ param(
     [string]$WindowsIdentityFile = '',
     [string]$LinuxIdentityFile = '',
     [string]$HostKeyAliasPrefix = 'cpctunnel',
+    [ValidateSet('github', 'microsoft', 'github-device-code', 'microsoft-device-code')]
+    [string]$DevTunnelLoginProvider = 'microsoft',
     [string[]]$Transport = @('devtunnel'),
     [string[]]$TcpChannel = @()
 )
@@ -109,6 +111,7 @@ if ($duplicateChannels) {
     Name = $Name
     TunnelId = $TunnelId
     CommandName = $CommandName
+    DevTunnelLoginProvider = $DevTunnelLoginProvider
     HostKeyAliasPrefix = $HostKeyAliasPrefix
     Transports = $Transport
     WindowsSshUser = $WindowsSshUser

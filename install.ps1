@@ -1321,6 +1321,7 @@ function Install-Client {
         -AgentChatPort $AgentChatPort `
         -WindowsIdentityFile $WindowsIdentityFile `
         -LinuxIdentityFile $LinuxIdentityFile `
+        -DevTunnelLoginProvider $DevTunnelLoginProvider `
         -Transport $Transport `
         -TcpChannel $TcpChannel
 
