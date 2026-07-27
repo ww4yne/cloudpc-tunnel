@@ -3,6 +3,7 @@ param(
     [switch]$Server,
     [switch]$Client,
     [switch]$Status,
+    [switch]$Uninstall,
     [switch]$WebOnly,
 
     [string]$TunnelId,
@@ -24,6 +25,9 @@ param(
     [string]$AgentWorkingDirectory = '~',
     [ValidateSet('github', 'microsoft', 'github-device-code', 'microsoft-device-code')]
     [string]$DevTunnelLoginProvider = 'microsoft',
+    [switch]$DeleteTunnel,
+    [switch]$DisableSshd,
+    [switch]$KeepState,
     [switch]$SkipPackageInstall
 )
 
@@ -92,11 +96,19 @@ function Invoke-InstallWizard {
     $choice = Read-Menu 'What do you want to configure?' @(
         'Cloud PC host: configure this Windows 365 Cloud PC as the tunnel host',
         'Client device: configure this device to connect to a Cloud PC',
-        'Status: inspect a Cloud PC tunnel'
+        'Status: inspect a Cloud PC tunnel',
+        'Uninstall: remove the cloudpc-tunnel host runtime from this Cloud PC'
     ) 1
     $script:Server = $choice -eq 1
     $script:Client = $choice -eq 2
     $script:Status = $choice -eq 3
+    $script:Uninstall = $choice -eq 4
+
+    if ($script:Uninstall) {
+        $script:DeleteTunnel = Read-YesNo 'Also delete the Dev Tunnel(s) created by this tool?' $false
+        $script:DisableSshd = Read-YesNo 'Also stop and disable the Windows OpenSSH service?' $false
+        return
+    }
 
     if ($script:Server -or $script:Client) {
         $script:PromptCustomTcp = $false
@@ -200,12 +212,12 @@ function Invoke-InstallWizard {
     }
 }
 
-$selectedActions = @($Server, $Client, $Status) | Where-Object { $_ }
+$selectedActions = @($Server, $Client, $Status, $Uninstall) | Where-Object { $_ }
 if (@($selectedActions).Count -eq 0) {
     Invoke-InstallWizard
 }
 elseif (@($selectedActions).Count -gt 1) {
-    throw 'Specify only one action: -Server, -Client, or -Status.'
+    throw 'Specify only one action: -Server, -Client, -Status, or -Uninstall.'
 }
 
 function Assert-Administrator {
@@ -1449,6 +1461,181 @@ function Install-Client {
     if (-not $WebOnly -and $LinuxSshPort -gt 0) { Write-Host "  $CommandName bash" }
 }
 
+function Stop-CloudPcTunnelProcesses {
+    Write-Step 'Stopping cloudpc-tunnel host processes'
+    $serverDir = Join-Path $stateRoot 'server'
+    $escapedServerDir = [regex]::Escape($serverDir)
+
+    # Pass 1: launchers and watchdog scripts that would respawn their children.
+    $parents = @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.CommandLine -and (
+                    ($_.Name -eq 'wscript.exe' -and
+                        $_.CommandLine -match $escapedServerDir) -or
+                    (($_.Name -eq 'pwsh.exe' -or $_.Name -eq 'powershell.exe') -and
+                        $_.CommandLine -match '(start-host|tunnel-host)\.ps1')
+                )
+            }
+    )
+    foreach ($process in $parents) {
+        Stop-Process -Id ([int]$process.ProcessId) -Force `
+            -ErrorAction SilentlyContinue
+        Write-Host "  stopped $($process.Name) (PID $($process.ProcessId))"
+    }
+
+    # Pass 2: the long-running children they hosted.
+    Start-Sleep -Milliseconds 300
+    $serverScript = [regex]::Escape((Join-Path $projectRoot 'src\server.mjs'))
+    $children = @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.CommandLine -and (
+                    ($_.Name -eq 'devtunnel.exe' -and
+                        $_.CommandLine -match '(?i)\bhost\b') -or
+                    ($_.Name -eq 'node.exe' -and
+                        $_.CommandLine -match $serverScript)
+                )
+            }
+    )
+    foreach ($process in $children) {
+        Stop-Process -Id ([int]$process.ProcessId) -Force `
+            -ErrorAction SilentlyContinue
+        Write-Host "  stopped $($process.Name) (PID $($process.ProcessId))"
+    }
+
+    if (-not $parents -and -not $children) {
+        Write-Host '  no matching host processes running'
+    }
+}
+
+function Remove-CloudPcTunnels {
+    Write-Step 'Deleting cloudpc-tunnel Dev Tunnels'
+    if (-not (Get-Command devtunnel -ErrorAction SilentlyContinue)) {
+        Write-Warning 'devtunnel CLI not found; skipping tunnel deletion.'
+        return
+    }
+    $ids = [Collections.Generic.List[string]]::new()
+    $savedFile = Join-Path $stateRoot 'server\tunnel-id'
+    if (Test-Path $savedFile) {
+        $saved = (Get-Content $savedFile -Raw).Trim()
+        if ($saved) { $ids.Add($saved) }
+    }
+    $listResult = Invoke-DevtunnelWithLoginRetry @('list', '--json')
+    if ($listResult.ExitCode -eq 0 -and $listResult.Output) {
+        try {
+            $document = ConvertFrom-DevtunnelJsonOutput $listResult.Output
+            foreach ($tunnel in @($document.tunnels)) {
+                $isTool = (
+                    (@($tunnel.labels) -contains 'cloudpc-tunnel') -or
+                    ([string]$tunnel.description -match '^cloudpc-tunnel')
+                )
+                if ($isTool -and $tunnel.tunnelId) {
+                    $ids.Add([string]$tunnel.tunnelId)
+                }
+            }
+        }
+        catch {
+            Write-Warning "Could not parse tunnel list: $($_.Exception.Message)"
+        }
+    }
+    $unique = @($ids | Where-Object { $_ } | Select-Object -Unique)
+    if (-not $unique) {
+        Write-Host '  no cloudpc-tunnel Dev Tunnels found'
+        return
+    }
+    foreach ($id in $unique) {
+        $result = Invoke-DevtunnelWithLoginRetry @('delete', $id, '-f')
+        if ($result.ExitCode -eq 0) {
+            Write-Host "  deleted tunnel: $id"
+        }
+        else {
+            Write-Warning "  failed to delete tunnel: $id"
+        }
+    }
+}
+
+function Uninstall-Host {
+    Assert-Administrator
+    Write-Step 'Removing cloudpc-tunnel host runtime'
+
+    $taskNames = @('CloudPcTunnelWeb')
+    $taskNames += @(
+        Get-ScheduledTask -TaskName 'CloudPcTunnelHost-*' `
+            -ErrorAction SilentlyContinue | ForEach-Object TaskName
+    )
+    $removedTask = $false
+    foreach ($name in $taskNames) {
+        $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+        if (-not $task) { continue }
+        $task | Disable-ScheduledTask -ErrorAction SilentlyContinue | Out-Null
+        $task | Stop-ScheduledTask -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $name -Confirm:$false `
+            -ErrorAction SilentlyContinue
+        Write-Host "  removed task: $name"
+        $removedTask = $true
+    }
+    if (-not $removedTask) { Write-Host '  no Web/Host tasks found' }
+
+    # Remove the OpenSSH fallback task, its watchdog, and any fallback sshd.
+    $sshd = Join-Path $env:WINDIR 'System32\OpenSSH\sshd.exe'
+    $configPath = Join-Path $env:ProgramData 'ssh\sshd_config'
+    if (Test-Path $sshd) {
+        try {
+            Stop-OpenSshFallback -SshdPath $sshd -ConfigPath $configPath
+        }
+        catch {
+            Write-Warning "OpenSSH fallback cleanup: $($_.Exception.Message)"
+        }
+    }
+
+    Stop-CloudPcTunnelProcesses
+
+    if ($DeleteTunnel) { Remove-CloudPcTunnels }
+
+    $sshdService = Get-Service sshd -ErrorAction SilentlyContinue
+    if ($sshdService) {
+        Write-Step 'Reverting Windows OpenSSH service recovery configuration'
+        & sc.exe failure sshd 'reset=' '0' 'actions=' '' | Out-Null
+        & sc.exe failureflag sshd 0 | Out-Null
+        Write-Host '  cleared sshd failure actions and non-crash flag'
+        if ($DisableSshd) {
+            Stop-Service sshd -Force -ErrorAction SilentlyContinue
+            Set-Service sshd -StartupType Disabled -ErrorAction SilentlyContinue
+            Write-Host '  sshd service stopped and disabled'
+        }
+        else {
+            Write-Host '  left sshd service running (pass -DisableSshd to stop it)'
+        }
+    }
+
+    if ($KeepState) {
+        Write-Host "`nKept host state under $stateRoot (-KeepState)." `
+            -ForegroundColor DarkCyan
+    }
+    else {
+        $serverDir = Join-Path $stateRoot 'server'
+        if (Test-Path $serverDir) {
+            Remove-Item $serverDir -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "  removed host state: $serverDir"
+        }
+    }
+
+    Write-Host "`ncloudpc-tunnel host runtime removed." -ForegroundColor Green
+    Write-Host ''
+    Write-Host 'Finish in a NON-elevated PowerShell (user-scope packages):' `
+        -ForegroundColor Yellow
+    Write-Host '  winget uninstall --id Microsoft.devtunnel -e'
+    Write-Host '  # optional, only if Node is no longer needed on this Cloud PC:'
+    Write-Host '  winget uninstall --id OpenJS.NodeJS.LTS -e'
+    if (-not $DeleteTunnel) {
+        Write-Host ''
+        Write-Host ('Dev Tunnels were left intact. Re-run with -DeleteTunnel ' +
+            'to remove them.') -ForegroundColor Yellow
+    }
+    Write-Host 'Client profiles are removed separately with: cpct remove <profile>'
+}
+
 if ($Status) {
     Import-HostConfigForStatus
     & (Join-Path $projectRoot 'scripts\show-connection.ps1') `
@@ -1463,6 +1650,9 @@ if ($Status) {
         -TcpChannel $TcpChannel `
         -DevTunnelLoginProvider $DevTunnelLoginProvider `
         -WebOnly:$WebOnly
+}
+elseif ($Uninstall) {
+    Uninstall-Host
 }
 elseif ($Server) {
     Install-Host

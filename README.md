@@ -435,6 +435,38 @@ directly for repeatable setup.
 .\install.ps1 -Client -WebOnly -Name work-cloudpc -TunnelId <full-tunnel-id.cluster>
 ```
 
+## Uninstalling the Cloud PC host
+
+Run the uninstaller from an **elevated** PowerShell on the Cloud PC. It stops
+and unregisters the `CloudPcTunnelHost-*`, `CloudPcTunnelWeb`, and
+`CloudPcTunnelSshd` scheduled tasks, stops the processes they keep alive
+(the Dev Tunnel host, the Node Web Chat server, and the loopback OpenSSH
+fallback and its watchdog), reverts the Windows OpenSSH service recovery
+configuration, and removes host state under `~/.cloudpc-tunnel/server`.
+
+```powershell
+.\install.ps1 -Uninstall
+```
+
+Options:
+
+- `-DeleteTunnel` also deletes the Dev Tunnel(s) this tool created (the saved
+  tunnel and any tunnel labeled or described as `cloudpc-tunnel`).
+- `-DisableSshd` stops the Windows OpenSSH service and sets it to Disabled.
+- `-KeepState` keeps `~/.cloudpc-tunnel` instead of removing the server state.
+
+The uninstaller does not run `winget uninstall` for `devtunnel` or Node,
+because those are user-scope packages that must be removed from a **non-elevated**
+shell. It prints the exact commands to finish:
+
+```powershell
+winget uninstall --id Microsoft.devtunnel -e
+winget uninstall --id OpenJS.NodeJS.LTS -e   # optional
+```
+
+On a client device, remove a profile and its connector state with
+`cpct remove <profile>` (this does not delete the Dev Tunnel service resource).
+
 ## Security model
 
 Recommended defaults:
