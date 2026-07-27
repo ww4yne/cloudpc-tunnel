@@ -445,7 +445,7 @@ fallback and its watchdog), reverts the Windows OpenSSH service recovery
 configuration, and removes host state under `~/.cloudpc-tunnel/server`.
 
 ```powershell
-.\install.ps1 -Uninstall
+.\uninstall.ps1
 ```
 
 Options:

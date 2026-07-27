@@ -96,19 +96,11 @@ function Invoke-InstallWizard {
     $choice = Read-Menu 'What do you want to configure?' @(
         'Cloud PC host: configure this Windows 365 Cloud PC as the tunnel host',
         'Client device: configure this device to connect to a Cloud PC',
-        'Status: inspect a Cloud PC tunnel',
-        'Uninstall: remove the cloudpc-tunnel host runtime from this Cloud PC'
+        'Status: inspect a Cloud PC tunnel'
     ) 1
     $script:Server = $choice -eq 1
     $script:Client = $choice -eq 2
     $script:Status = $choice -eq 3
-    $script:Uninstall = $choice -eq 4
-
-    if ($script:Uninstall) {
-        $script:DeleteTunnel = Read-YesNo 'Also delete the Dev Tunnel(s) created by this tool?' $false
-        $script:DisableSshd = Read-YesNo 'Also stop and disable the Windows OpenSSH service?' $false
-        return
-    }
 
     if ($script:Server -or $script:Client) {
         $script:PromptCustomTcp = $false
@@ -226,7 +218,7 @@ function Assert-Administrator {
     if (-not $principal.IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator
     )) {
-        throw 'Host setup must run from an elevated PowerShell.'
+        throw 'This action must run from an elevated PowerShell.'
     }
 }
 
