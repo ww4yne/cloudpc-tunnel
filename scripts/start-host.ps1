@@ -8,6 +8,28 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
+$stateDir = if ($env:CLOUDPC_TUNNEL_SERVER_STATE_DIR) {
+    $env:CLOUDPC_TUNNEL_SERVER_STATE_DIR
+}
+else {
+    Join-Path $HOME '.cloudpc-tunnel\server'
+}
+$outLog = Join-Path $stateDir 'agent-chat.out.log'
+$errLog = Join-Path $stateDir 'agent-chat.err.log'
+$hostLog = Join-Path $stateDir 'agent-chat-host.log'
+New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+
+function Rotate-Log([string]$Path) {
+    if (-not (Test-Path $Path)) { return }
+    if ((Get-Item $Path).Length -lt 5MB) { return }
+    $previous = "$Path.1"
+    Remove-Item $previous -Force -ErrorAction SilentlyContinue
+    Move-Item $Path $previous -Force
+}
+
+function Write-HostLog([string]$Message) {
+    Add-Content $hostLog ('[{0:u}] {1}' -f (Get-Date), $Message) -Encoding UTF8
+}
 
 function Resolve-WorkingDirectory([string]$Path) {
     if (-not $Path) { return $HOME }
@@ -44,12 +66,55 @@ $env:CLOUDPC_AGENT_CWD = Resolve-WorkingDirectory $WorkingDirectory
 $env:CLOUDPC_AGENT_PORT = "$Port"
 
 Write-Host "Starting Agent Chat on 127.0.0.1:$Port" -ForegroundColor Cyan
-Set-Location $projectRoot
+$node = (Get-Command node -ErrorAction Stop).Source
+$serverScript = Join-Path $projectRoot 'src\server.mjs'
+$serverProcess = $null
+$exitCode = 1
 try {
-    & node .\src\server.mjs
+    Rotate-Log $outLog
+    Rotate-Log $errLog
+    Rotate-Log $hostLog
+    Write-HostLog "starting Agent Chat on port $Port"
+    $serverProcess = Start-Process -FilePath $node `
+        -ArgumentList ('"{0}"' -f $serverScript) `
+        -WorkingDirectory $projectRoot `
+        -RedirectStandardOutput $outLog `
+        -RedirectStandardError $errLog `
+        -WindowStyle Hidden -PassThru
+
+    while ($true) {
+        Start-Sleep -Seconds 2
+        if ($serverProcess.HasExited) {
+            $serverProcess.Refresh()
+            $nodeExitCode = [int]$serverProcess.ExitCode
+            Write-HostLog "Agent Chat exited code=$nodeExitCode"
+            # A long-running host should never exit successfully. Return failure
+            # so Task Scheduler applies its restart policy.
+            $exitCode = if ($nodeExitCode -eq 0) { 1 } else { $nodeExitCode }
+            break
+        }
+        if ($wslKeepalive -and $wslKeepalive.HasExited) {
+            $wslKeepalive.Refresh()
+            Write-HostLog (
+                "WSL keepalive exited code=$($wslKeepalive.ExitCode); " +
+                'restarting the host task'
+            )
+            $exitCode = 1
+            break
+        }
+    }
+}
+catch {
+    Write-HostLog "host failure: $($_.Exception.Message)"
+    throw
 }
 finally {
+    if ($serverProcess -and -not $serverProcess.HasExited) {
+        Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
+    }
     if ($wslKeepalive -and -not $wslKeepalive.HasExited) {
         Stop-Process -Id $wslKeepalive.Id -Force -ErrorAction SilentlyContinue
     }
 }
+
+exit $exitCode

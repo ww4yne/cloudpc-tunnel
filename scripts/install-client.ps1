@@ -5,7 +5,7 @@ param(
     [string]$WindowsSshUser,
     [string]$LinuxSshUser,
     [switch]$WebOnly,
-    [string]$CommandName = 'cpctunnel',
+    [string]$CommandName = 'cpct',
     [string]$WindowsSession = 'cpctunnel',
     [string]$LinuxSession = 'cpctunnel',
     [int]$WindowsSshPort = 22,

@@ -10,7 +10,7 @@ param(
     [string]$Distro = 'Ubuntu',
     [string]$WindowsSshUser,
     [string]$LinuxSshUser,
-    [string]$CommandName = 'cpctunnel',
+    [string]$CommandName = 'cpct',
     [string]$WindowsSession = 'cpctunnel',
     [string]$LinuxSession = 'cpctunnel',
     [int]$WindowsSshPort = 22,
@@ -809,30 +809,113 @@ function Add-OpenSshCapability([string]$Name) {
     }
 }
 
-function Start-OpenSshTaskFallback([string]$SshdPath, [string]$ConfigPath) {
+function Stop-OpenSshFallback([string]$SshdPath, [string]$ConfigPath) {
+    $taskName = 'CloudPcTunnelSshd'
+    $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($task) {
+        $task | Stop-ScheduledTask -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false `
+            -ErrorAction SilentlyContinue
+    }
+
+    $watchdogPath = Join-Path $projectRoot 'scripts\sshd-host.ps1'
+    $watchdogs = @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.CommandLine -and
+                $_.CommandLine -match [regex]::Escape($watchdogPath)
+            }
+    )
+    foreach ($watchdog in $watchdogs) {
+        Stop-Process -Id ([int]$watchdog.ProcessId) -Force `
+            -ErrorAction SilentlyContinue
+    }
+    if ($watchdogs) {
+        $deadline = (Get-Date).AddSeconds(5)
+        do {
+            $remainingWatchdogs = @(
+                $watchdogs |
+                    Where-Object {
+                        Get-Process -Id ([int]$_.ProcessId) `
+                            -ErrorAction SilentlyContinue
+                    }
+            )
+            if ($remainingWatchdogs) { Start-Sleep -Milliseconds 200 }
+        } while ($remainingWatchdogs -and (Get-Date) -lt $deadline)
+        if ($remainingWatchdogs) {
+            throw (
+                'OpenSSH fallback watchdog did not stop: ' +
+                (($remainingWatchdogs | ForEach-Object ProcessId) -join ', ')
+            )
+        }
+    }
+
+    $escapedConfig = [regex]::Escape($ConfigPath)
     $existing = @(
         Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
             Where-Object {
                 $_.CommandLine -and
                 $_.CommandLine -match [regex]::Escape($SshdPath) -and
-                $_.CommandLine -match '\s-D\s'
+                $_.CommandLine -match '\s-D(?:\s|$)' -and
+                $_.CommandLine -match $escapedConfig
             }
     )
     foreach ($process in $existing) {
         Stop-Process -Id ([int]$process.ProcessId) -Force `
             -ErrorAction SilentlyContinue
     }
+}
 
-    $fallback = Start-Process -FilePath $SshdPath `
-        -ArgumentList @('-D', '-f', $ConfigPath) `
-        -WindowStyle Hidden -PassThru
+function Register-OpenSshFallbackTask(
+    [string]$SshdPath,
+    [string]$ConfigPath
+) {
+    $taskName = 'CloudPcTunnelSshd'
+    $pwsh = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+    if (-not $pwsh) {
+        $pwsh = Join-Path $env:SystemRoot `
+            'System32\WindowsPowerShell\v1.0\powershell.exe'
+    }
+    $watchdog = Join-Path $projectRoot 'scripts\sshd-host.ps1'
+    $serverDir = Join-Path $stateRoot 'server'
+    New-Item -ItemType Directory -Path $serverDir -Force | Out-Null
+    $launcher = Join-Path $serverDir 'sshd-host-hidden.vbs'
+    $arguments = @(
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', "`"$watchdog`"",
+        '-SshdPath', "`"$SshdPath`"",
+        '-ConfigPath', "`"$ConfigPath`""
+    )
+    $hostCommand = ('"{0}" {1}' -f $pwsh, ($arguments -join ' '))
+    $escapedCommand = $hostCommand.Replace('"', '""')
+    @"
+Set shell = CreateObject("WScript.Shell")
+exitCode = shell.Run("$escapedCommand", 0, True)
+WScript.Quit exitCode
+"@ | Set-Content $launcher -Encoding ASCII
+
+    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $action = New-ScheduledTaskAction `
+        -Execute (Join-Path $env:WINDIR 'System32\wscript.exe') `
+        -Argument ('//B //NoLogo "{0}"' -f $launcher)
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
+    $principal = New-ScheduledTaskPrincipal -UserId $currentUser `
+        -LogonType Interactive -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
+        -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+    Register-ScheduledTask -TaskName $taskName -Action $action `
+        -Trigger $trigger -Principal $principal -Settings $settings `
+        -Description 'Keeps the loopback-only cloudpc-tunnel OpenSSH fallback running.' `
+        -Force | Out-Null
+    Start-ScheduledTask -TaskName $taskName
 
     $deadline = (Get-Date).AddSeconds(20)
     do {
         Start-Sleep -Milliseconds 500
-        if ($fallback.HasExited) {
-            return $false
-        }
         $listeners = @(
             Get-NetTCPConnection -State Listen -LocalPort 22 `
                 -ErrorAction SilentlyContinue
@@ -975,7 +1058,17 @@ Subsystem sftp sftp-server.exe
     }
 
     Write-Host 'Starting Windows OpenSSH service...' -ForegroundColor DarkCyan
+    Stop-OpenSshFallback -SshdPath $sshd -ConfigPath $configPath
     Set-Service sshd -StartupType Automatic
+    & sc.exe failure sshd 'reset=' '86400' 'actions=' `
+        'restart/5000/restart/30000/restart/60000' | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Failed to configure Windows sshd service recovery actions.'
+    }
+    & sc.exe failureflag sshd 1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Failed to enable Windows sshd non-crash failure recovery.'
+    }
     Restart-Service sshd -ErrorAction SilentlyContinue
     if ((Get-Service sshd).Status -ne 'Running') {
         $conflicts = @(
@@ -993,22 +1086,28 @@ Subsystem sftp sftp-server.exe
             Start-Service sshd -ErrorAction Stop
         }
         catch {
-            if (Start-OpenSshTaskFallback -SshdPath $sshd -ConfigPath $configPath) {
-                return
+            if (Register-OpenSshFallbackTask `
+                    -SshdPath $sshd -ConfigPath $configPath) {
+                Write-Host (
+                    'Windows sshd service could not start; registered the ' +
+                    'persistent CloudPcTunnelSshd fallback task.'
+                ) -ForegroundColor Yellow
             }
-            $events = @(
-                Get-WinEvent -LogName 'OpenSSH/Operational' -MaxEvents 8 `
-                    -ErrorAction SilentlyContinue |
-                    Select-Object TimeCreated, Id, LevelDisplayName, Message
-            )
-            $service = Get-CimInstance Win32_Service -Filter "Name='sshd'" |
-                Select-Object State, StartMode, ExitCode, PathName
-            throw (
-                "Failed to start sshd.`nService:`n" +
-                ($service | Format-List | Out-String) +
-                "`nOpenSSH events:`n" +
-                ($events | Format-List | Out-String)
-            )
+            else {
+                $events = @(
+                    Get-WinEvent -LogName 'OpenSSH/Operational' -MaxEvents 8 `
+                        -ErrorAction SilentlyContinue |
+                        Select-Object TimeCreated, Id, LevelDisplayName, Message
+                )
+                $service = Get-CimInstance Win32_Service -Filter "Name='sshd'" |
+                    Select-Object State, StartMode, ExitCode, PathName
+                throw (
+                    "Failed to start sshd.`nService:`n" +
+                    ($service | Format-List | Out-String) +
+                    "`nOpenSSH events:`n" +
+                    ($events | Format-List | Out-String)
+                )
+            }
         }
     }
     Disable-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' `
@@ -1101,15 +1200,19 @@ WScript.Quit exitCode
     $wscript = Join-Path $env:WINDIR 'System32\wscript.exe'
     $action = New-ScheduledTaskAction -Execute $wscript `
         -Argument ('//B //NoLogo "{0}"' -f $launcher)
-    $trigger = New-ScheduledTaskTrigger -AtLogOn `
-        -User ([Security.Principal.WindowsIdentity]::GetCurrent().Name)
-    $settings = New-ScheduledTaskSettingsSet `
+    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
+    $principal = New-ScheduledTaskPrincipal -UserId $currentUser `
+        -LogonType Interactive -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
         -ExecutionTimeLimit ([TimeSpan]::Zero) `
-        -RestartCount 5 `
+        -RestartCount 999 `
         -RestartInterval (New-TimeSpan -Minutes 1) `
         -MultipleInstances IgnoreNew
     Register-ScheduledTask -TaskName $taskName -Action $action `
-        -Trigger $trigger -Settings $settings -Force | Out-Null
+        -Trigger $trigger -Principal $principal -Settings $settings `
+        -Description 'Runs cloudpc-tunnel Web Chat and monitors its WSL runtime.' `
+        -Force | Out-Null
     Start-ScheduledTask -TaskName $taskName
 
     $deadline = (Get-Date).AddSeconds(30)
@@ -1118,11 +1221,26 @@ WScript.Quit exitCode
         try {
             $health = Invoke-RestMethod "http://127.0.0.1:$AgentChatPort/api/health" `
                 -TimeoutSec 2
-            if ($health.ok) { return }
+            if ($health.ok -and $health.name -eq 'cloudpc-tunnel') { return }
         } catch {}
     } while ((Get-Date) -lt $deadline)
 
-    throw 'Agent Chat task started but its health endpoint did not become ready.'
+    $logFiles = @(
+        (Join-Path $serverDir 'agent-chat-host.log'),
+        (Join-Path $serverDir 'agent-chat.err.log'),
+        (Join-Path $serverDir 'agent-chat.out.log')
+    )
+    foreach ($logFile in $logFiles) {
+        if (Test-Path $logFile) {
+            Write-Host "`n--- $logFile ---" -ForegroundColor Yellow
+            Get-Content $logFile -Tail 30 -ErrorAction SilentlyContinue |
+                Write-Host
+        }
+    }
+    throw (
+        "Agent Chat task started but cloudpc-tunnel health did not become ready " +
+        "on 127.0.0.1:$AgentChatPort."
+    )
 }
 
 function Restart-SelectedTunnelHost([string]$SelectedTunnel) {

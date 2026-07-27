@@ -170,7 +170,7 @@ if ($WebOnly) {
         '-Client',
         '-WebOnly',
         '-Name', "'$profileName'",
-        '-CommandName', 'cpctunnel',
+        '-CommandName', 'cpct',
         '-TunnelId', "'$TunnelId'"
     )
     if ($AgentChatPort -ne 8787) {
@@ -186,7 +186,7 @@ else {
         '.\install.ps1',
         '-Client',
         '-Name', "'$profileName'",
-        '-CommandName', 'cpctunnel',
+        '-CommandName', 'cpct',
         '-TunnelId', "'$TunnelId'"
     )
     if ($WindowsSshPort -gt 0 -and $windowsUser) {

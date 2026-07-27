@@ -8,18 +8,18 @@ ACTIVE_FILE="$CONFIG_DIR/active-profile"
 usage() {
   cat <<'EOF'
 Usage:
-  cpctunnel list
-  cpctunnel use <profile>
-  cpctunnel remove <profile>
-  cpctunnel status [profile]
-  cpctunnel reconnect [profile]
-  cpctunnel disconnect [profile]
-  cpctunnel logs [profile]
-  cpctunnel pwsh [profile]
-  cpctunnel bash [profile]
-  cpctunnel agent [profile]
-  cpctunnel port <channel> [profile]
-  cpctunnel open <channel> [profile]
+  cpct list
+  cpct use <profile>
+  cpct remove <profile>
+  cpct status [profile]
+  cpct reconnect [profile]
+  cpct disconnect [profile]
+  cpct logs [profile]
+  cpct pwsh [profile]
+  cpct bash [profile]
+  cpct agent [profile]
+  cpct port <channel> [profile]
+  cpct open <channel> [profile]
 
 macOS/Linux client support requires devtunnel and OpenSSH tools.
 EOF
@@ -82,7 +82,7 @@ profile_or_default() {
     fi
   fi
   [ -n "$profile" ] || {
-    echo "No active cloudpc-tunnel profile. Run 'cpctunnel list' or install a client profile." >&2
+    echo "No active cloudpc-tunnel profile. Run 'cpct list' or install a client profile." >&2
     exit 1
   }
   [ -f "$(profile_file "$profile")" ] || {
@@ -228,7 +228,7 @@ case "$cmd" in
     ;;
   use)
     profile="${1:-}"
-    [ -n "$profile" ] || { echo "Usage: cpctunnel use <profile>" >&2; exit 1; }
+    [ -n "$profile" ] || { echo "Usage: cpct use <profile>" >&2; exit 1; }
     validate_profile_name "$profile"
     [ -f "$(profile_file "$profile")" ] || { echo "Profile not found: $profile" >&2; exit 1; }
     mkdir -p "$CONFIG_DIR"
@@ -237,7 +237,7 @@ case "$cmd" in
     ;;
   remove)
     profile="${1:-}"
-    [ -n "$profile" ] || { echo "Usage: cpctunnel remove <profile>" >&2; exit 1; }
+    [ -n "$profile" ] || { echo "Usage: cpct remove <profile>" >&2; exit 1; }
     validate_profile_name "$profile"
     file="$(profile_file "$profile")"
     [ -f "$file" ] || { echo "Profile not found: $profile" >&2; exit 1; }
@@ -247,7 +247,7 @@ case "$cmd" in
     rm -rf "$(state_dir "$profile")"
     if [ "$(active_profile)" = "$profile" ]; then
       rm -f "$ACTIVE_FILE"
-      echo "Removed active cloudpc-tunnel profile '$profile'. Run 'cpctunnel use <profile>' to choose a new default."
+      echo "Removed active cloudpc-tunnel profile '$profile'. Run 'cpct use <profile>' to choose a new default."
     else
       echo "Removed cloudpc-tunnel profile '$profile'."
     fi
@@ -300,7 +300,7 @@ for ch in data.get("Channels", []):
   port)
     channel="${1:-}"
     profile="$(profile_or_default "${2:-}")"
-    [ -n "$channel" ] || { echo "Usage: cpctunnel port <channel> [profile]" >&2; exit 1; }
+    [ -n "$channel" ] || { echo "Usage: cpct port <channel> [profile]" >&2; exit 1; }
     port="$(ensure_channel_port "$profile" "$channel")"
     printf '127.0.0.1:%s\n' "$port"
     ;;

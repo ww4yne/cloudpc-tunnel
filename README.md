@@ -8,7 +8,7 @@ the optional Web Chat experience.
 The CLI command installed by this project is:
 
 ```powershell
-cpctunnel
+cpct
 ```
 
 ## What this is for
@@ -50,7 +50,7 @@ wizard, but it intentionally has no hard-coded jump host defaults.
 
 ```text
 client device
-  cpctunnel
+  cpct
     |
     | private TCP transport
     |   - Microsoft Dev Tunnels private access
@@ -75,6 +75,22 @@ Windows 365 Cloud PC
 | custom channel | user-selected | Web apps, WebSocket, APIs, databases, other TCP services |
 
 SCP and SFTP do not require separate ports. They use an SSH channel.
+
+### Host recovery model
+
+- Windows OpenSSH is configured as an automatic service with Windows Service
+  Control Manager recovery actions. If the service cannot run on a particular
+  Cloud PC image, the installer registers a loopback-only
+  `CloudPcTunnelSshd` watchdog task instead.
+- The Dev Tunnel host runs under the signed-in Cloud PC user because Dev
+  Tunnels authentication is user-scoped. `CloudPcTunnelHost-*` starts at user
+  logon, starts when a trigger was missed, and retries the host process with
+  bounded exponential backoff.
+- Web Chat uses the same logon recovery model through `CloudPcTunnelWeb`.
+- After a Cloud PC reboot, Windows OpenSSH service mode can become ready before
+  sign-in. Dev Tunnel hosting and any task-based fallback become ready after
+  the configured Cloud PC user signs in.
+- Host logs live under `.cloudpc-tunnel/server/` and rotate at 5 MB.
 
 ## System requirements
 
@@ -211,7 +227,7 @@ Choose:
 3. A profile name, such as `work-cloudpc`.
 4. The tunnel ID printed by the Cloud PC setup.
 5. SSH users and key paths if you enabled SSH channels.
-The installer writes the `cpctunnel` command under `%USERPROFILE%\bin`.
+The installer writes the `cpct` command under `%USERPROFILE%\bin`.
 Reopen PowerShell if your PATH was updated during installation.
 
 ## Multiple Cloud PCs
@@ -227,11 +243,11 @@ between users. On a client device, install one profile per Cloud PC:
 Then switch the default profile or pass a profile name to a command:
 
 ```powershell
-cpctunnel list
-cpctunnel use cpcn3y
-cpctunnel status
-cpctunnel pwsh dbxn3y
-cpctunnel agent cpcn3y
+cpct list
+cpct use cpcn3y
+cpct status
+cpct pwsh dbxn3y
+cpct agent cpcn3y
 ```
 
 ## Guided setup on a macOS or Linux client device
@@ -250,7 +266,7 @@ From the repository checkout:
 sh ./install.sh
 ```
 
-The installer writes `cpctunnel` to `~/.local/bin` by default and stores profile
+The installer writes `cpct` to `~/.local/bin` by default and stores profile
 state under `~/.cloudpc-tunnel`.
 
 If `~/.local/bin` is not on your `PATH`, add it in your shell profile.
@@ -261,40 +277,40 @@ The client installer also checks Dev Tunnels login and runs
 ## Common commands
 
 ```powershell
-cpctunnel list
-cpctunnel use <profile>
-cpctunnel remove <profile>
-cpctunnel status
-cpctunnel reconnect
-cpctunnel disconnect
-cpctunnel logs
+cpct list
+cpct use <profile>
+cpct remove <profile>
+cpct status
+cpct reconnect
+cpct disconnect
+cpct logs
 ```
 
 | Command | Purpose |
 | --- | --- |
-| `cpctunnel list` | List configured Cloud PC profiles |
-| `cpctunnel use <profile>` | Make a profile the default |
-| `cpctunnel remove <profile>` | Remove a local profile and connector state without deleting the Dev Tunnel |
-| `cpctunnel status` | Show tunnel and channel readiness |
-| `cpctunnel reconnect` | Restart the local connector |
-| `cpctunnel disconnect` | Stop the local connector |
-| `cpctunnel logs` | Follow local connector logs |
-| `cpctunnel pwsh [-Session name]` | Open or reattach a Windows PowerShell session |
-| `cpctunnel bash [-Session name]` | Open or reattach a WSL Bash session |
-| `cpctunnel agent` | Open the Web Chat surface |
-| `cpctunnel port <channel>` | Print the local endpoint for a named channel |
-| `cpctunnel open <channel>` | Open a web-like channel in the default browser |
+| `cpct list` | List configured Cloud PC profiles |
+| `cpct use <profile>` | Make a profile the default |
+| `cpct remove <profile>` | Remove a local profile and connector state without deleting the Dev Tunnel |
+| `cpct status` | Show tunnel and channel readiness |
+| `cpct reconnect` | Restart the local connector |
+| `cpct disconnect` | Stop the local connector |
+| `cpct logs` | Follow local connector logs |
+| `cpct pwsh [-Session name]` | Open or reattach a Windows PowerShell session |
+| `cpct bash [-Session name]` | Open or reattach a WSL Bash session |
+| `cpct agent` | Open the Web Chat surface |
+| `cpct port <channel>` | Print the local endpoint for a named channel |
+| `cpct open <channel>` | Open a web-like channel in the default browser |
 
 ## Using Windows PowerShell over SSH
 
 ```powershell
-cpctunnel pwsh
+cpct pwsh
 ```
 
 With a custom persistent session name:
 
 ```powershell
-cpctunnel pwsh -Session project-a
+cpct pwsh -Session project-a
 ```
 
 The remote session is hosted by `psmux` on the Cloud PC, so closing the local
@@ -303,13 +319,13 @@ terminal does not automatically stop the remote shell.
 ## Using WSL Bash over SSH
 
 ```powershell
-cpctunnel bash
+cpct bash
 ```
 
 With a custom persistent session name:
 
 ```powershell
-cpctunnel bash -Session project-a
+cpct bash -Session project-a
 ```
 
 The remote session is hosted by `tmux` inside WSL.
@@ -321,7 +337,7 @@ SCP and SFTP use the local forwarded port for an SSH channel.
 First resolve the channel:
 
 ```powershell
-cpctunnel port windows-ssh
+cpct port windows-ssh
 ```
 
 Example output:
@@ -340,7 +356,7 @@ sftp -P 51234 user@127.0.0.1
 For WSL:
 
 ```powershell
-cpctunnel port wsl-ssh
+cpct port wsl-ssh
 sftp -P <local-port> linuxuser@127.0.0.1
 ```
 
@@ -357,13 +373,13 @@ kind: web
 Then on the client:
 
 ```powershell
-cpctunnel open webapp
+cpct open webapp
 ```
 
 or:
 
 ```powershell
-cpctunnel port webapp
+cpct port webapp
 ```
 
 Use the printed `127.0.0.1:<port>` endpoint with your browser, API client, or
@@ -374,7 +390,7 @@ WebSocket client.
 If Web Chat is enabled:
 
 ```powershell
-cpctunnel agent
+cpct agent
 ```
 
 The browser opens the private Web Chat surface through the selected transport.
@@ -393,7 +409,7 @@ directly for repeatable setup.
 
 ```powershell
 .\install.ps1 -Server `
-  -CommandName cpctunnel `
+  -CommandName cpct `
   -WindowsSshPort 22 `
   -LinuxSshPort 2222 `
   -AgentChatPort 8787 `
@@ -408,7 +424,7 @@ directly for repeatable setup.
   -TunnelId <full-tunnel-id.cluster> `
   -WindowsSshUser <DOMAIN\user> `
   -LinuxSshUser <linux-user> `
-  -CommandName cpctunnel `
+  -CommandName cpct `
   -TcpChannel webapp=3000:web
 ```
 
@@ -446,12 +462,12 @@ Recommended defaults:
 
 ## Troubleshooting
 
-### `cpctunnel` is not recognized
+### `cpct` is not recognized
 
 Reopen PowerShell and confirm `%USERPROFILE%\bin` is on `PATH`.
 
 ```powershell
-Get-Command cpctunnel
+Get-Command cpct
 ```
 
 ### The configured tunnel has no active host
@@ -460,8 +476,8 @@ Open the Cloud PC through Windows App or browser access, sign in, and confirm
 the `cloudpc-tunnel` host task is running. Then reconnect from the client:
 
 ```powershell
-cpctunnel reconnect
-cpctunnel status
+cpct reconnect
+cpct status
 ```
 
 ### SSH login fails
@@ -469,7 +485,7 @@ cpctunnel status
 Check the selected channel:
 
 ```powershell
-cpctunnel port windows-ssh
+cpct port windows-ssh
 ```
 
 Then confirm the Cloud PC user, password or key, and host key prompt. For WSL,
@@ -482,8 +498,8 @@ Confirm the app is listening on the configured Cloud PC port and bound to an
 address reachable from the Cloud PC host process. Then run:
 
 ```powershell
-cpctunnel reconnect
-cpctunnel port <channel>
+cpct reconnect
+cpct port <channel>
 ```
 
 ## Development checks

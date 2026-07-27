@@ -252,7 +252,7 @@ profile = {
     "SchemaVersion": 2,
     "Name": name,
     "TunnelId": tunnel_id,
-    "CommandName": "cpctunnel",
+    "CommandName": "cpct",
     "DevTunnelLoginProvider": devtunnel_login,
     "HostKeyAliasPrefix": "cpctunnel",
     "Transports": ["devtunnel"],
@@ -279,9 +279,9 @@ if not isinstance(data.get("Channels"), list):
     raise SystemExit(f"profile has no channel list: {path}")
 PY
 printf '%s\n' "$name" >"$ACTIVE_FILE"
-cp "$SCRIPT_DIR/src/cpctunnel.sh" "$BIN_DIR/cpctunnel"
-chmod +x "$BIN_DIR/cpctunnel"
+cp "$SCRIPT_DIR/src/cpctunnel.sh" "$BIN_DIR/cpct"
+chmod +x "$BIN_DIR/cpct"
 
-echo "Installed cpctunnel to $BIN_DIR"
+echo "Installed cpct to $BIN_DIR"
 echo "Active profile: $name"
 echo "If needed, add $BIN_DIR to PATH."

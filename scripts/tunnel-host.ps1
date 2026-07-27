@@ -24,12 +24,26 @@ function Write-Log([string]$Message) {
         -Encoding UTF8
 }
 
+function Rotate-Log {
+    if (-not (Test-Path $logFile)) { return }
+    if ((Get-Item $logFile).Length -lt 5MB) { return }
+    $previous = "$logFile.1"
+    Remove-Item $previous -Force -ErrorAction SilentlyContinue
+    Move-Item $logFile $previous -Force
+}
+
 $devtunnel = Resolve-Devtunnel
 $backoff = 2
 while ($true) {
+    Rotate-Log
     Write-Log "starting configured tunnel ports"
+    $startedAt = Get-Date
     & $devtunnel host $TunnelId *>> $logFile
     $exitCode = $LASTEXITCODE
+    $runtime = (Get-Date) - $startedAt
+    if ($runtime.TotalMinutes -ge 5) {
+        $backoff = 2
+    }
     Write-Log "host exited code=$exitCode; retry in ${backoff}s"
     Start-Sleep -Seconds $backoff
     $backoff = [Math]::Min(60, $backoff * 2)

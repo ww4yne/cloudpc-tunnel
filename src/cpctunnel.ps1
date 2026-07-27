@@ -65,13 +65,13 @@ if ($Action -eq 'list') {
 }
 
 if ($Action -eq 'use') {
-    if (-not $Target) { throw 'Usage: cpctunnel use <profile>' }
+    if (-not $Target) { throw 'Usage: cpct use <profile>' }
     if ($Target -notmatch '^[A-Za-z0-9_.-]+$') {
         throw 'Invalid profile name.'
     }
     $targetFile = Join-Path $profilesDir "$Target.json"
     if (-not (Test-Path $targetFile)) {
-        throw "Profile not found: $Target. Run 'cpctunnel list'."
+        throw "Profile not found: $Target. Run 'cpct list'."
     }
     New-Item -ItemType Directory -Path $configDir -Force | Out-Null
     Set-Content $activeFile $Target -Encoding ASCII
@@ -80,7 +80,7 @@ if ($Action -eq 'use') {
 }
 
 if ($Action -eq 'remove') {
-    if (-not $Target) { throw 'Usage: cpctunnel remove <profile>' }
+    if (-not $Target) { throw 'Usage: cpct remove <profile>' }
     if ($Target -notmatch '^[A-Za-z0-9_.-]+$') {
         throw 'Invalid profile name.'
     }
@@ -105,10 +105,10 @@ else {
 }
 if (-not (Test-Path $configFile)) {
     if ($Action -eq 'remove' -and $profileName) {
-        throw "Profile not found: $profileName. Run 'cpctunnel list'."
+        throw "Profile not found: $profileName. Run 'cpct list'."
     }
     throw (
-        "No active cloudpc-tunnel profile. Run 'cpctunnel list' or install a Client " +
+        "No active cloudpc-tunnel profile. Run 'cpct list' or install a Client " +
         'profile with install.ps1 -Client -Name <name>.'
     )
 }
@@ -141,7 +141,7 @@ function Assert-DevtunnelLogin {
     if ($text -match
         '(?i)(login token expired|login required|not logged|not authenticated)') {
         throw (
-            "Dev Tunnels login is missing or expired; cpctunnel cannot inspect profile '$profileName'. Run: " +
+            "Dev Tunnels login is missing or expired; cpct cannot inspect profile '$profileName'. Run: " +
             (Get-DevtunnelLoginCommand)
         )
     }
@@ -189,7 +189,7 @@ function Ensure-ActiveTunnel {
         } else { '' }
         throw (
             "Profile '$profileName' is configured for Dev Tunnel '$currentId', " +
-            "but that tunnel has no active host and cpctunnel could not list " +
+            "but that tunnel has no active host and cpct could not list " +
             "replacement tunnels. Required host ports: $requiredPortText.$detail"
         )
     }
@@ -706,7 +706,7 @@ switch ($Action) {
             Remove-Item $activeFile -Force -ErrorAction SilentlyContinue
             Write-Host (
                 "Removed active cloudpc-tunnel profile '$profileName'. " +
-                "Run 'cpctunnel use <profile>' to choose a new default."
+                "Run 'cpct use <profile>' to choose a new default."
             ) -ForegroundColor Yellow
         }
         else {
@@ -720,7 +720,7 @@ switch ($Action) {
             -ErrorAction SilentlyContinue
     }
     'port' {
-        if (-not $Target) { throw 'Usage: cpctunnel port <channel> [profile]' }
+        if (-not $Target) { throw 'Usage: cpct port <channel> [profile]' }
         $channel = Get-Channel $Target
         Ensure-ActiveTunnel
         Start-Connector @([int]$channel.HostPort)
@@ -738,7 +738,7 @@ switch ($Action) {
         }
     }
     'open' {
-        if (-not $Target) { throw 'Usage: cpctunnel open <channel> [profile]' }
+        if (-not $Target) { throw 'Usage: cpct open <channel> [profile]' }
         $channel = Get-Channel $Target
         Ensure-ActiveTunnel
         Start-Connector @([int]$channel.HostPort)
