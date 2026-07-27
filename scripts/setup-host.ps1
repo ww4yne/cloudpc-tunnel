@@ -4,7 +4,8 @@ param(
     [string]$TunnelId,
     [string]$Distro = 'Ubuntu',
     [int]$WslSshPort = 2222,
-    [int]$AgentChatPort = 8787
+    [int]$AgentChatPort = 8787,
+    [string]$AuthorizedKey = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -88,6 +89,32 @@ fi
 ss -ltn | grep ':$WslSshPort '
 "@
 Invoke-WslRoot $linuxSetup
+
+if ($AuthorizedKey) {
+    Write-Host 'Installing WSL SSH authorized key...' -ForegroundColor Cyan
+    $keyB64 = [Convert]::ToBase64String(
+        [Text.Encoding]::UTF8.GetBytes($AuthorizedKey.Trim()))
+    $keySetup = @"
+set -e
+key="`$(printf '%s' '$keyB64' | base64 -d)"
+user="`$(getent passwd 1000 | cut -d: -f1)"
+home="`$(getent passwd 1000 | cut -d: -f6)"
+if [ -z "`$user" ] || [ -z "`$home" ]; then
+  echo "could not resolve the default WSL user (uid 1000)" >&2
+  exit 1
+fi
+mkdir -p "`$home/.ssh"
+chmod 700 "`$home/.ssh"
+touch "`$home/.ssh/authorized_keys"
+if ! grep -qxF "`$key" "`$home/.ssh/authorized_keys"; then
+  printf '%s\n' "`$key" >> "`$home/.ssh/authorized_keys"
+fi
+chmod 600 "`$home/.ssh/authorized_keys"
+chown -R "`$user:`$user" "`$home/.ssh"
+echo "authorized key installed for `$user"
+"@
+    Invoke-WslRoot $keySetup
+}
 
 if (-not (Test-NetConnection 127.0.0.1 -Port $WslSshPort `
         -InformationLevel Quiet -WarningAction SilentlyContinue)) {

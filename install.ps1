@@ -20,6 +20,7 @@ param(
     [int]$AgentChatPort = 8787,
     [string]$WindowsIdentityFile = '',
     [string]$LinuxIdentityFile = '',
+    [string]$AuthorizedKey = '',
     [ValidateSet('devtunnel', 'ssh-jump')]
     [string[]]$Transport = @('devtunnel'),
     [string[]]$TcpChannel = @(),
@@ -196,6 +197,13 @@ function Invoke-InstallWizard {
     $script:AgentChatPort = [int](Read-Text 'Web Chat host port, 0 to disable' "$AgentChatPort")
     if ($script:Server -and $script:AgentChatPort -gt 0) {
         $script:AgentWorkingDirectory = Read-Text 'Default agent working directory' $AgentWorkingDirectory
+    }
+
+    if ($script:Server -and -not $script:WebOnly) {
+        $script:AuthorizedKey = Read-Text (
+            'SSH public key (or .pub path) to authorize for key-based login, ' +
+            'blank to skip'
+        ) $AuthorizedKey
     }
 
     if ($script:PromptCustomTcp) {
@@ -1009,6 +1017,107 @@ WScript.Quit exitCode
     return $false
 }
 
+function Get-AuthorizedKeyLine([string]$Value) {
+    if (-not $Value) { return '' }
+    $line = $Value
+    if (Test-Path $Value) {
+        $line = (Get-Content $Value -Raw).Trim()
+    }
+    $line = $line.Trim()
+    if (-not $line) { return '' }
+    if ($line -notmatch '^(ssh-(rsa|ed25519)|ecdsa-sha2-\S+)\s+\S+') {
+        throw "AuthorizedKey is not a valid SSH public key (or path): $Value"
+    }
+    return $line
+}
+
+function Install-WindowsAdminAuthorizedKey([string]$KeyLine) {
+    if (-not $KeyLine) { return }
+    Write-Step 'Installing Windows SSH authorized key'
+    $sshDir = Join-Path $env:ProgramData 'ssh'
+    $adminKeys = Join-Path $sshDir 'administrators_authorized_keys'
+    New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
+    $existing = @()
+    if (Test-Path $adminKeys) {
+        $existing = @(Get-Content $adminKeys -ErrorAction SilentlyContinue)
+    }
+    $keyBody = ($KeyLine -split '\s+')[1]
+    $has = $existing | Where-Object { $_ -and ($_ -split '\s+')[1] -eq $keyBody }
+    if ($has) {
+        Write-Host '  key already present'
+        $lines = $existing
+    }
+    else {
+        $lines = @($existing | Where-Object { $_ -and $_.Trim() }) + $KeyLine
+        Write-Host '  appended key'
+    }
+    Set-Content $adminKeys ($lines -join "`r`n") -Encoding ASCII
+    & icacls $adminKeys /inheritance:r | Out-Null
+    & icacls $adminKeys /grant '*S-1-5-32-544:F' | Out-Null   # Administrators
+    & icacls $adminKeys /grant '*S-1-5-18:F' | Out-Null       # SYSTEM
+    $acl = Get-Acl $adminKeys
+    foreach ($ace in @($acl.Access)) {
+        $sid = try {
+            $ace.IdentityReference.Translate(
+                [Security.Principal.SecurityIdentifier]).Value
+        } catch { '' }
+        if ($sid -notin @('S-1-5-32-544', 'S-1-5-18')) {
+            $acl.RemoveAccessRule($ace) | Out-Null
+        }
+    }
+    Set-Acl $adminKeys $acl
+}
+
+function Test-WindowsSshTokenReady([string]$User) {
+    # Verify sshd can build a logon token for the SSH user. On a Cloud PC that
+    # cannot reach its on-prem domain controller, S4U token generation for a
+    # domain/hybrid account fails and sshd resets the connection at preauth.
+    if (-not $User) { return $true }
+    $sshExe = Join-Path $env:WINDIR 'System32\OpenSSH\ssh.exe'
+    if (-not (Test-Path $sshExe)) { $sshExe = 'ssh' }
+    $knownHosts = [IO.Path]::GetTempFileName()
+    # ssh.exe writes diagnostics to stderr; under Windows PowerShell 5.1 with
+    # ErrorActionPreference=Stop, capturing native stderr via 2>&1 would throw a
+    # terminating NativeCommandError. Capture with Continue so the probe text is
+    # returned instead of aborting the install.
+    $previousEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $raw = & $sshExe -p 22 `
+            -o StrictHostKeyChecking=no `
+            -o "UserKnownHostsFile=$knownHosts" `
+            -o BatchMode=yes `
+            -o PreferredAuthentications=publickey `
+            -o ConnectTimeout=6 `
+            "$User@127.0.0.1" exit 2>&1 | Out-String
+    }
+    catch {
+        $raw = "$($_.Exception.Message)"
+    }
+    finally {
+        $ErrorActionPreference = $previousEap
+        Remove-Item $knownHosts -Force -ErrorAction SilentlyContinue
+    }
+    if ($raw -match 'Connection reset|Connection closed') {
+        Write-Host ''
+        Write-Host '  WARNING: the Windows SSH channel will NOT work for user' `
+            -ForegroundColor Yellow
+        Write-Host "  '$User' on this Cloud PC." -ForegroundColor Yellow
+        Write-Host '  sshd cannot mint a logon token for this account, typically' `
+            -ForegroundColor Yellow
+        Write-Host '  because the Cloud PC cannot reach its on-prem domain' `
+            -ForegroundColor Yellow
+        Write-Host '  controller (Entra/hybrid account S4U logon fails).' `
+            -ForegroundColor Yellow
+        Write-Host '  Use the WSL SSH channel (cpct bash) or the Web Chat/Terminal' `
+            -ForegroundColor Yellow
+        Write-Host '  (cpct agent), or give this Cloud PC line-of-sight to the DC.' `
+            -ForegroundColor Yellow
+        return $false
+    }
+    return $true
+}
+
 function Ensure-WindowsOpenSsh {
     Write-Step 'Checking Windows OpenSSH Server'
     $capability = Get-OpenSshCapability
@@ -1454,11 +1563,24 @@ function Install-Host {
     if ($LinuxSshPort -gt 0) { Ensure-Wsl }
     if ($AgentChatPort -gt 0) { Ensure-CopilotLogin }
 
+    $resolvedKey = Get-AuthorizedKeyLine $AuthorizedKey
+    $windowsSshReady = $true
+    if ($WindowsSshPort -gt 0) {
+        $windowsUserForCheck = if ($WindowsSshUser) {
+            $WindowsSshUser
+        } else {
+            Get-WindowsSshUser
+        }
+        if ($resolvedKey) { Install-WindowsAdminAuthorizedKey $resolvedKey }
+        $windowsSshReady = Test-WindowsSshTokenReady $windowsUserForCheck
+    }
+
     if ($LinuxSshPort -gt 0) {
         Write-Step 'Configuring WSL runtime'
         & (Join-Path $projectRoot 'scripts\setup-host.ps1') `
             -TunnelId $selectedTunnel -Distro $Distro `
-            -WslSshPort $LinuxSshPort -AgentChatPort $AgentChatPort
+            -WslSshPort $LinuxSshPort -AgentChatPort $AgentChatPort `
+            -AuthorizedKey $resolvedKey
     }
 
     Restart-SelectedTunnelHost $selectedTunnel
@@ -1485,7 +1607,18 @@ function Install-Host {
     if ($WindowsSshPort -gt 0) { Write-Host "Windows SSH user: $windowsUser" }
     if ($LinuxSshPort -gt 0) { Write-Host "WSL SSH user    : $linuxUser" }
     if ($AgentChatPort -gt 0) { Write-Host "Web Chat        : http://127.0.0.1:$AgentChatPort (private tunnel)" }
-    if ($LinuxSshPort -gt 0) {
+    if ($WindowsSshPort -gt 0 -and -not $windowsSshReady) {
+        Write-Host ''
+        Write-Host 'Windows SSH (cpct pwsh) is unavailable on this Cloud PC (see the' `
+            -ForegroundColor Yellow
+        Write-Host 'token warning above). Prefer cpct bash (WSL) or cpct agent (Web).' `
+            -ForegroundColor Yellow
+    }
+    if ($resolvedKey) {
+        Write-Host ''
+        Write-Host 'Authorized the provided public key for key-based SSH login.'
+    }
+    if ($LinuxSshPort -gt 0 -and -not $resolvedKey) {
         Write-Host ''
         Write-Host 'If the WSL user has no SSH password, run:'
         Write-Host "  wsl.exe -d $Distro -u root -- passwd $linuxUser"

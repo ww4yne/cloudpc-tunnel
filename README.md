@@ -413,8 +413,33 @@ directly for repeatable setup.
   -WindowsSshPort 22 `
   -LinuxSshPort 2222 `
   -AgentChatPort 8787 `
+  -AuthorizedKey "$HOME\.ssh\id_ed25519.pub" `
   -TcpChannel webapp=3000:web
 ```
+
+`-AuthorizedKey` (a public key line or a `.pub` file path) authorizes key-based
+SSH login. The host installs it for the Windows SSH channel
+(`administrators_authorized_keys`, strict ACLs) and the WSL SSH channel
+(`~/.ssh/authorized_keys`). Public-key auth is recommended, and is **required**
+for Entra/Microsoft-account users, whose password auth does not work over
+Windows OpenSSH.
+
+### Cloud PCs without on-prem domain connectivity
+
+On a Cloud PC that cannot reach its on-prem domain controller, the **Windows SSH
+channel does not work** for a domain/hybrid account (`DOMAIN\user`): sshd cannot
+mint a logon token (S4U needs the DC), so `cpct pwsh` connections reset. AAD-style
+names (`azuread\user`, the UPN) do not resolve either. The host installer detects
+this during setup and prints a warning. On these Cloud PCs, use:
+
+- **`cpct bash`** — WSL SSH authenticates a local Linux account, so it is
+  unaffected; this is the recommended terminal. Pair it with `-AuthorizedKey`
+  for passwordless login.
+- **`cpct agent`** — the Web Chat/Terminal runs as your real signed-in user
+  (full Entra/OneDrive context), reached over the tunnel in a browser.
+
+Give the Cloud PC line-of-sight to the domain controller (VPN/hybrid) if you
+need native Windows SSH under your real account.
 
 By default the host creates (or reuses) a Dev Tunnel **named after this Cloud
 PC's hostname**, so the tunnel ID is stable and re-running setup is idempotent.
