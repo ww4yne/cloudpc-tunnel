@@ -416,6 +416,17 @@ directly for repeatable setup.
   -TcpChannel webapp=3000:web
 ```
 
+By default the host creates (or reuses) a Dev Tunnel **named after this Cloud
+PC's hostname**, so the tunnel ID is stable and re-running setup is idempotent.
+
+- `-TunnelName <name>` overrides the derived name (3-60 lowercase letters,
+  digits, and hyphens).
+- `-TunnelId <full-id.cluster>` uses an existing tunnel as-is instead.
+- `-CleanupTunnels` deletes the other Dev Tunnels this tool created (matched by
+  the `cloudpc-tunnel` label or description), keeping only the one this host
+  uses. On an account shared by several Cloud PCs this also removes the other
+  hosts' tunnels, so use it only when you intend to reset them.
+
 ### Client device
 
 ```powershell

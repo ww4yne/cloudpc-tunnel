@@ -7,6 +7,7 @@ param(
     [switch]$WebOnly,
 
     [string]$TunnelId,
+    [string]$TunnelName = '',
     [string]$Name,
     [string]$Distro = 'Ubuntu',
     [string]$WindowsSshUser,
@@ -28,6 +29,7 @@ param(
     [switch]$DeleteTunnel,
     [switch]$DisableSshd,
     [switch]$KeepState,
+    [switch]$CleanupTunnels,
     [switch]$SkipPackageInstall
 )
 
@@ -150,7 +152,11 @@ function Invoke-InstallWizard {
             4 { 'github-device-code' }
         }
     }
-    $script:TunnelId = Read-Text 'Existing Dev Tunnel ID with cluster suffix, or blank to create/use one' $TunnelId
+    $script:TunnelId = Read-Text 'Existing Dev Tunnel ID with cluster suffix, or blank to name it after this Cloud PC' $TunnelId
+
+    if ($script:Server -and -not $script:TunnelId) {
+        $script:CleanupTunnels = Read-YesNo 'Delete other cloudpc-tunnel Dev Tunnels created earlier?' $false
+    }
 
     if ($script:Client) {
         $defaultName = if ($Name) { $Name } elseif ($TunnelId) { $TunnelId.Split('.')[0] } else { $env:COMPUTERNAME.ToLowerInvariant() }
@@ -469,6 +475,68 @@ function ConvertFrom-DevtunnelJsonOutput([object[]]$Output) {
     return $json | ConvertFrom-Json
 }
 
+function Get-HostTunnelName {
+    $raw = if ($TunnelName) { $TunnelName } else { $env:COMPUTERNAME }
+    $name = ("$raw").ToLowerInvariant()
+    $name = $name -replace '[^a-z0-9-]', '-'
+    $name = $name -replace '-+', '-'
+    $name = $name.Trim('-')
+    if ($name.Length -gt 60) {
+        $name = $name.Substring(0, 60).Trim('-')
+    }
+    if ($name.Length -lt 3) {
+        $name = ('cpc-' + $name).Trim('-')
+    }
+    if ($name -notmatch '^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$') {
+        throw (
+            "Could not derive a valid Dev Tunnel name from '$raw'. " +
+            'Pass -TunnelName with 3-60 characters of lowercase letters, ' +
+            'digits, and hyphens.'
+        )
+    }
+    return $name
+}
+
+function Remove-OtherCloudPcTunnels([string]$KeepId) {
+    Write-Step 'Cleaning up other cloudpc-tunnel Dev Tunnels'
+    $listResult = Invoke-DevtunnelWithLoginRetry @('list', '--json')
+    if ($listResult.ExitCode -ne 0 -or -not $listResult.Output) {
+        Write-Warning 'Could not list Dev Tunnels for cleanup.'
+        return
+    }
+    try {
+        $document = ConvertFrom-DevtunnelJsonOutput $listResult.Output
+    }
+    catch {
+        Write-Warning "Could not parse tunnel list: $($_.Exception.Message)"
+        return
+    }
+    $victims = @(
+        foreach ($tunnel in @($document.tunnels)) {
+            $id = [string]$tunnel.tunnelId
+            if (-not $id -or $id -eq $KeepId) { continue }
+            $isTool = (
+                (@($tunnel.labels) -contains 'cloudpc-tunnel') -or
+                ([string]$tunnel.description -match '^cloudpc-tunnel')
+            )
+            if ($isTool) { $id }
+        }
+    )
+    if (-not $victims) {
+        Write-Host '  no other cloudpc-tunnel Dev Tunnels found'
+        return
+    }
+    foreach ($id in $victims) {
+        $result = Invoke-DevtunnelWithLoginRetry @('delete', $id, '-f')
+        if ($result.ExitCode -eq 0) {
+            Write-Host "  deleted tunnel: $id"
+        }
+        else {
+            Write-Warning "  failed to delete tunnel: $id"
+        }
+    }
+}
+
 function Ensure-LinkTunnel([int[]]$Ports) {
     if ('ssh-jump' -in $Transport) {
         throw 'SSH jump host transport is planned but not implemented in this preview. Select Microsoft Dev Tunnels for this version.'
@@ -479,45 +547,54 @@ function Ensure-LinkTunnel([int[]]$Ports) {
     Ensure-DevtunnelLogin
     Assert-TunnelId $TunnelId
     $serverDir = Join-Path $stateRoot 'server'
-    $savedTunnelFile = Join-Path $serverDir 'tunnel-id'
     $selectedTunnel = Normalize-TunnelId $TunnelId
-    if (-not $selectedTunnel -and (Test-Path $savedTunnelFile)) {
-        $savedTunnel = Normalize-TunnelId (Get-Content $savedTunnelFile -Raw)
-        if ($savedTunnel) {
-            Assert-TunnelId $savedTunnel
-            $selectedTunnel = $savedTunnel
-            Write-Host "Reusing saved cloudpc-tunnel tunnel: $selectedTunnel" `
-                -ForegroundColor Green
-        }
-    }
     if ($selectedTunnel) {
+        # Explicit full tunnel ID: require that it already exists.
         $showResult = Invoke-DevtunnelWithLoginRetry @('show', $selectedTunnel, '--json')
         if ($showResult.ExitCode -ne 0 -or -not $showResult.Output) {
-            if ($TunnelId) {
-                throw "Configured Dev Tunnel was not found: $selectedTunnel"
-            }
-            throw (
-                "Saved cloudpc-tunnel Dev Tunnel was not found: $selectedTunnel. " +
-                "Pass -TunnelId to select a different tunnel or remove $savedTunnelFile."
-            )
+            throw "Configured Dev Tunnel was not found: $selectedTunnel"
         }
     }
     else {
-        Write-Step 'Creating private cloudpc-tunnel'
-        $createResult = Invoke-DevtunnelWithLoginRetry @(
-            'create',
-            '--description',
-            'cloudpc-tunnel private TCP tunnel',
-            '--json'
-        )
-        if ($createResult.ExitCode -ne 0) {
-            if ($createResult.Output) {
-                Write-Host ($createResult.Output -join [Environment]::NewLine)
-            }
-            throw 'Failed to create Dev Tunnel.'
+        # Default: a stable Dev Tunnel named after this Cloud PC.
+        $desiredName = Get-HostTunnelName
+        Write-Step "Ensuring cloudpc-tunnel '$desiredName'"
+        $showResult = Invoke-DevtunnelWithLoginRetry @('show', $desiredName, '--json')
+        if ($showResult.ExitCode -eq 0 -and $showResult.Output) {
+            $selectedTunnel = Normalize-TunnelId (
+                ConvertFrom-DevtunnelJsonOutput $showResult.Output
+            )
+            Write-Host "Reusing existing tunnel '$desiredName': $selectedTunnel" `
+                -ForegroundColor Green
         }
-        $created = ConvertFrom-DevtunnelJsonOutput $createResult.Output
-        $selectedTunnel = Normalize-TunnelId (Get-CreatedTunnelId $created)
+        else {
+            $createResult = Invoke-DevtunnelWithLoginRetry @(
+                'create', $desiredName,
+                '--description', 'cloudpc-tunnel private TCP tunnel',
+                '--labels', 'cloudpc-tunnel',
+                '--json'
+            )
+            if ($createResult.ExitCode -eq 0) {
+                $created = ConvertFrom-DevtunnelJsonOutput $createResult.Output
+                $selectedTunnel = Normalize-TunnelId (Get-CreatedTunnelId $created)
+            }
+            else {
+                # A conflict means the name already exists (race or a prior
+                # partial run); resolve it by name instead of failing.
+                $recheck = Invoke-DevtunnelWithLoginRetry @('show', $desiredName, '--json')
+                if ($recheck.ExitCode -eq 0 -and $recheck.Output) {
+                    $selectedTunnel = Normalize-TunnelId (
+                        ConvertFrom-DevtunnelJsonOutput $recheck.Output
+                    )
+                }
+                else {
+                    if ($createResult.Output) {
+                        Write-Host ($createResult.Output -join [Environment]::NewLine)
+                    }
+                    throw "Failed to create Dev Tunnel '$desiredName'."
+                }
+            }
+        }
     }
     $selectedTunnel = Normalize-TunnelId $selectedTunnel
     Assert-TunnelId $selectedTunnel
@@ -1351,6 +1428,7 @@ function Install-Host {
     }
     $selectedTunnel = Normalize-TunnelId @(Ensure-LinkTunnel $selectedPorts)
     Assert-TunnelId $selectedTunnel
+    if ($CleanupTunnels) { Remove-OtherCloudPcTunnels $selectedTunnel }
 
     if ($WebOnly) {
         if ($AgentChatPort -gt 0) { Ensure-CopilotLogin }
