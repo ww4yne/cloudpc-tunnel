@@ -118,6 +118,16 @@ $processFile = Join-Path $stateDir 'connector.json'
 $outLog = Join-Path $stateDir 'connector.out.log'
 $errLog = Join-Path $stateDir 'connector.err.log'
 New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+# Adopt the log paths the running connector actually uses (Start-Connector may
+# have rotated to a fresh file when the canonical log was locked).
+if (Test-Path $processFile) {
+    try {
+        $savedMeta = Get-Content $processFile -Raw | ConvertFrom-Json
+        if ($savedMeta.LogOut) { $outLog = [string]$savedMeta.LogOut }
+        if ($savedMeta.LogErr) { $errLog = [string]$savedMeta.LogErr }
+    }
+    catch {}
+}
 
 function Resolve-Devtunnel {
     $command = Get-Command devtunnel -ErrorAction SilentlyContinue
@@ -310,9 +320,20 @@ function Get-ConnectorProcess {
         $metadata = Get-Content $processFile -Raw | ConvertFrom-Json
         $process = Get-Process -Id ([int]$metadata.ProcessId) -ErrorAction SilentlyContinue
         if (-not $process) { return $null }
+        # devtunnel runs as a protected process: its live Path and StartTime can
+        # be unreadable. Reject only on a positive mismatch, never because a
+        # field is empty/unreadable, otherwise a live connector becomes
+        # invisible and cannot be stopped.
+        if ($process.ProcessName -ne 'devtunnel') { return $null }
         $metadataPath = [string]$metadata.ExecutablePath
-        if ($metadataPath -and $process.Path -ne $metadataPath) { return $null }
-        if ($process.StartTime.ToUniversalTime().Ticks -ne [long]$metadata.StartTimeUtcTicks) {
+        $livePath = try { [string]$process.Path } catch { '' }
+        if ($metadataPath -and $livePath -and $livePath -ne $metadataPath) {
+            return $null
+        }
+        $liveTicks = $null
+        try { $liveTicks = $process.StartTime.ToUniversalTime().Ticks } catch {}
+        if ($null -ne $liveTicks -and
+            $liveTicks -ne [long]$metadata.StartTimeUtcTicks) {
             return $null
         }
         return $process
@@ -398,6 +419,22 @@ function Get-ChannelPorts {
     )
 }
 
+function Test-LogWritable([string]$Path) {
+    try {
+        $stream = [IO.File]::Open(
+            $Path,
+            [IO.FileMode]::OpenOrCreate,
+            [IO.FileAccess]::ReadWrite,
+            [IO.FileShare]::None
+        )
+        $stream.Dispose()
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
 function Stop-Connector(
     [string[]]$TunnelIds = @([string]$config.TunnelId)
 ) {
@@ -430,24 +467,18 @@ function Stop-Connector(
     }
     Remove-Item $processFile -ErrorAction SilentlyContinue
 
-    # Redirected log handles can release a moment after process exit.
+    # Redirected log handles can release a moment after process exit. Wait
+    # briefly, but do not fail the whole command if the old log stays locked
+    # (antivirus/indexer/lingering handle) - Start-Connector rotates to a
+    # fresh log file in that case.
     $deadline = (Get-Date).AddSeconds(5)
     do {
-        try {
-            $stream = [IO.File]::Open(
-                $outLog,
-                [IO.FileMode]::OpenOrCreate,
-                [IO.FileAccess]::ReadWrite,
-                [IO.FileShare]::None
-            )
-            $stream.Dispose()
-            return
-        }
-        catch {
-            Start-Sleep -Milliseconds 100
-        }
+        if (Test-LogWritable $outLog) { return }
+        Start-Sleep -Milliseconds 100
     } while ((Get-Date) -lt $deadline)
-    throw "Connector log is still locked after stopping matching processes: $outLog"
+    Write-Warning (
+        "Connector log is still locked; a fresh log file will be used: $outLog"
+    )
 }
 
 function Start-Connector([int[]]$RequiredHostPorts) {
@@ -463,6 +494,13 @@ function Start-Connector([int[]]$RequiredHostPorts) {
     if ($process -and $ready) { return }
 
     Stop-Connector
+    # If the canonical logs are still locked, rotate to fresh timestamped
+    # files so a briefly-held handle cannot block reconnect.
+    if (-not (Test-LogWritable $outLog) -or -not (Test-LogWritable $errLog)) {
+        $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        $script:outLog = Join-Path $stateDir "connector.out.$stamp.log"
+        $script:errLog = Join-Path $stateDir "connector.err.$stamp.log"
+    }
     Set-Content $outLog ''
     Set-Content $errLog ''
     $exe = Resolve-Devtunnel
@@ -476,6 +514,8 @@ function Start-Connector([int[]]$RequiredHostPorts) {
         ProcessId = $process.Id
         ExecutablePath = if ($process.Path) { $process.Path } else { $exe }
         StartTimeUtcTicks = $process.StartTime.ToUniversalTime().Ticks
+        LogOut = $outLog
+        LogErr = $errLog
     } | ConvertTo-Json | Set-Content $processFile -Encoding UTF8
 
     $deadline = (Get-Date).AddSeconds(60)
